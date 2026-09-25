@@ -169,6 +169,11 @@ tree), so a partial resolution counts as blocked.
    tool**; peer chat is left to the board, and node↔dispatcher control stays
    structured. If the board is absent, the DAG alone still performs its node↔
    dispatcher control, but it does not grow into a general message board.
+   The board is **repository-scoped** (its file lives in the shared git common
+   directory), so a node agent in its worktree and the dispatcher in the root
+   resolve the same board — the documented peer channel works without the DAG
+   knowing the board exists, and the clean-root check is unaffected because
+   nothing is written into a working tree.
 
 ## Formalism change
 
