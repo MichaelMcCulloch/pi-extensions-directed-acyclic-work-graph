@@ -16,6 +16,7 @@ import { isEnabled, reduceCommand, type DagCommand, type DagEffect, type ReduceR
 import {
   applyDeclaration,
   initDagState,
+  normalizeDagState,
   validateDeclaration,
   type DagState,
   type NodeDeclaration,
@@ -69,7 +70,9 @@ export class DagStore {
 
   public constructor(persistence: DagPersistence, initial: DagState = initDagState()) {
     this.#persistence = persistence;
-    this.#state = initial;
+    // Snapshots can predate the current machine fields; migrate on load so a
+    // restored session satisfies the present invariant instead of bricking.
+    this.#state = normalizeDagState(initial);
   }
 
   public get state(): DagState {

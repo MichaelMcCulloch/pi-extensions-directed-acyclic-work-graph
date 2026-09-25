@@ -99,6 +99,80 @@ export function initDagState(): DagState {
   return { revision: 0, operationCounter: 0, order: [], nodes: {}, droppedEffects: 0, receipts: [] };
 }
 
+/**
+ * Repair a snapshot written by an older revision of the model.
+ *
+ * The machine fields were added incrementally. A snapshot from before the
+ * worktree/integration and declared-file-check revisions can contain nodes that
+ * are `completed` but carry no `committed`/`registered`/`gstate`/`checked`,
+ * and nodes that were dispatched before the dependency-integration coupling
+ * existed. Grandfather exactly the facts the old transitions implied so that
+ * the recovered state satisfies the current invariant; present values are kept.
+ * This is a migration, not a verification shortcut: the synthesized values are
+ * what the old model meant by completion (a commit, a worktree, a check).
+ */
+export function normalizeDagState(state: DagState): DagState {
+  const nodes: Record<NodeId, DagNode> = {};
+  for (const id of state.order) {
+    const node = state.nodes[id];
+    if (node === undefined) continue;
+    const status = node.status ?? "pending";
+    const gen = node.gen ?? 0;
+    const completed = status === "completed";
+    const dispatched = status !== "pending";
+    const integrated = node.integrated ?? false;
+    const phase = node.gstate;
+    nodes[id] = {
+      ...node,
+      status,
+      gen,
+      cmd: node.cmd ?? "none",
+      effect: node.effect ?? "idle",
+      effectFence: node.effectFence ?? gen,
+      completedGen: node.completedGen ?? (completed ? gen : 0),
+      // `absent` on a node that had been dispatched is pre-worktree bookkeeping.
+      gstate:
+        phase !== undefined && phase !== "absent"
+          ? phase
+          : integrated
+            ? "integrated"
+            : completed
+              ? "completed"
+              : dispatched
+                ? "created"
+                : "absent",
+      committed: node.committed ?? (completed || integrated),
+      integrated,
+      registered: node.registered ?? (completed || status === "in_progress"),
+      merging: false,
+      checked: node.checked ?? completed,
+      worktree: node.worktree ?? null,
+      branch: node.branch ?? null,
+      base: node.base ?? null,
+      completedCommit: node.completedCommit ?? null,
+      mergeCommit: node.mergeCommit ?? null,
+    };
+  }
+  // The dependency-integration coupling postdates the first snapshots: a node
+  // that left `pending` was dispatched when dependency *completion* sufficed.
+  for (const id of state.order) {
+    const node = nodes[id];
+    if (node === undefined || node.status === "pending") continue;
+    for (const dep of node.deps) {
+      const depNode = nodes[dep];
+      if (depNode !== undefined && depNode.status === "completed" && !depNode.integrated) {
+        nodes[dep] = { ...depNode, integrated: true, gstate: "integrated", committed: true };
+      }
+    }
+  }
+  return {
+    ...state,
+    nodes,
+    droppedEffects: state.droppedEffects ?? 0,
+    receipts: state.receipts ?? [],
+  };
+}
+
 /** The declared node ids in declaration order. */
 export function nodeIds(state: DagState): readonly NodeId[] {
   return state.order;
