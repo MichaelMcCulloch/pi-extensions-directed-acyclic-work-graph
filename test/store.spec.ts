@@ -15,6 +15,7 @@ function dispatch(store: DagStore, node: string): void {
 }
 
 function integrate(store: DagStore, node: string): void {
+  store.checkFiles(node);
   store.settle(node, "complete", "done", `commit-${node}`);
   store.beginMerge(node);
   store.recordMerge(node, `merge-${node}`);
@@ -46,6 +47,7 @@ describe("DagStore (single composed machine)", () => {
     const store = new DagStore(memory().persistence);
     store.declare(modelDeclarations());
     dispatch(store, "n1");
+    store.checkFiles("n1");
     store.settle("n1", "complete", "done", "commit-n1");
     // The scheduler considers n2 ready; the composed model does not.
     expect(store.state.nodes["n2"]?.status).toBe("pending");
@@ -103,5 +105,12 @@ describe("DagStore (single composed machine)", () => {
     store.apply({ type: "reconcile", node: "n1" });
     expect(store.state.nodes["n1"]?.status).toBe("starting");
     expect(store.violations()).toEqual([]);
+  });
+
+  it("refuses to complete before the declared-file check", () => {
+    const store = new DagStore(memory().persistence);
+    store.declare(modelDeclarations());
+    dispatch(store, "n1");
+    expect(() => store.settle("n1", "complete", "done", "commit-n1")).toThrow(DagOperationError);
   });
 });

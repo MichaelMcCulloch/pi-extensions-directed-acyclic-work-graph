@@ -10,12 +10,14 @@ There is **one** TLA+ subject and **one** executable mirror:
 | Artifact | Role |
 |---|---|
 | `spec/DagSystem.tla` | the whole DAG tool as one product: scheduler + worktree/integration + declared file ownership, with the coupling invariants |
+| `spec/DagSystemProof.tla` | the TLAPS inductive proof: `Spec => []Inv` for **arbitrary** `Nodes`, `Edges`, `Files`, `MaxGen`, `MaxDropped` (510 obligations) |
 | `src/formal/system-model.ts` | the executable mirror of that product |
 | `test/system-model.spec.ts` | exhaustive exploration + count cross-check: the mirror reaches exactly the TLC count |
 
-TLC verifies **2,665 distinct reachable states** with safety (`CoreInv`,
-`GitInv`, `CouplingInv`, `FileOwnership`) and liveness. The invariants that only
-the product can state are the point:
+TLC verifies **3,946 distinct reachable states** on the fixture with safety and
+liveness. TLAPS then proves that the safety invariant is inductive, so `[]Inv`
+holds for **every** node set and dependency relation, not just the fixture. The
+invariants that only the product can state are the point:
 
 - `DispatchRequiresDepsIntegrated` — a node starts only when every dependency is
   git-`integrated`, not merely core-`completed`;
@@ -60,7 +62,8 @@ of production behavior.
 
 | Piece | Where | State |
 |---|---|---|
-| The composed machine | `spec/DagSystem.tla` | TLC-verified (2,665 states; scheduler + worktree + file ownership, coupling invariants) |
+| The composed machine | `spec/DagSystem.tla` | TLC-verified on the fixture (3,946 states; scheduler + worktree + file ownership, coupling invariants) |
+| Safety for arbitrary N | `spec/DagSystemProof.tla` | TLAPS: `Init => Inv` and all 22 actions preserve all 10 components; `[]Inv` for every `Nodes`, `Edges`, `Files`, `MaxGen`, `MaxDropped` |
 | Executable mirror + count cross-check | `src/formal/system-model.ts`, `test/system-model.spec.ts` | done; TS reaches TLC's exact count |
 | Production machine | `src/engine/state.ts`, `src/engine/reducer.ts`, `src/extension/store.ts` | one durable store whose reducer IS `referenceReduceSystemState` |
 | Git engine | `src/engine/git.ts` | done; probe, add, validate, ff-or-`--no-ff`, abort, resolve, remove, repair; tested against a real repo |
@@ -83,11 +86,35 @@ All items above are implemented:
 - Declared file ownership is exclusive across a declaration, so parallel nodes
   cannot claim the same file and silently overwrite each other at merge time.
 
-Remaining known limits: the resolver is judged by git state (no merge in
-progress and a clean tree), so a partial resolution is treated as blocked;
-settlement is serialized (concurrent spawns, one merge at a time); `run`
-defaults to generation 1 unless one is supplied; file ownership is a static
-declaration rule with tests, not a modelled invariant in `DagGit`.
+Closable gaps closed after the first audit:
+
+- **Recovery on load.** A restored snapshot's effects and in-progress merges are
+  process-local and stale; the extension now runs the model's `Crash` + `Reopen`
+  + `Reconcile` through `DagStore.recover()`, and the dispatcher re-admits a
+  recovered node in place. A model stutter burns no revision.
+- **File ownership is a modelled completion contract.** The spec has a
+  `checked` flag (`GuardCheckFiles`, `CompletedFilesChecked`), and production
+  refuses `complete` until `git diff base..HEAD` is inside the declared files.
+- **Every git failure maps onto the alphabet.** `#gitFailed` converts an
+  unexpected `GitError` (locked index, I/O failure) into `stop`, `merge-conflict`,
+  or `fail`, so no raw I/O error escapes the verified alphabet.
+- **A hung child is bounded.** `PiSpawner` kills after a timeout and reports
+  `failed`, so the liveness properties' fairness assumption is enforced in
+  practice rather than assumed.
+- **Overlapping dispatches are refused** by an in-flight guard, so settlements
+  cannot interleave.
+- **Crash injection** covers a lost final append and an interrupted merge at the
+  store level, and the board quarantines a corrupt artifact, reclaims a stale
+  lock, and times out on a live one.
+
+Still environment-bound, and named rather than hidden: the TLC run is on a
+finite fixture (two nodes, `MaxGen=2`, `MaxDropped=4`), so **liveness** is
+checked exhaustively only for that instance (safety is a theorem in N via
+`DagSystemProof.tla`); git's full behavior space is mapped as outcomes, but only
+the mapped alphabet is verified; the child process is not sandboxed to its
+worktree; and the board's unforgeability is a code-path property, not
+cryptographic. The resolver is judged by git state (no merge in progress, clean
+tree), so a partial resolution counts as blocked.
 
 ## Decisions
 

@@ -65,6 +65,8 @@ export interface DagNode {
   readonly integrated: boolean;
   readonly registered: boolean;
   readonly merging: boolean;
+  /** The dispatcher validated the completion commit against the declared files. */
+  readonly checked: boolean;
   // Git facts (durable workspace observations)
   readonly worktree: string | null;
   readonly branch: string | null;
@@ -216,6 +218,7 @@ function initialMachine(node: NodeDeclaration, existing: DagNode | undefined): O
       integrated: existing.integrated,
       registered: existing.registered,
       merging: existing.merging,
+      checked: existing.checked,
       worktree: existing.worktree,
       branch: existing.branch,
       base: existing.base,
@@ -236,6 +239,7 @@ function initialMachine(node: NodeDeclaration, existing: DagNode | undefined): O
     integrated: false,
     registered: false,
     merging: false,
+    checked: false,
     worktree: null,
     branch: null,
     base: null,

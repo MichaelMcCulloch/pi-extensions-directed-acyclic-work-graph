@@ -45,7 +45,11 @@ export default function dagExtension(pi: ExtensionAPI): void {
   const persistence: DagPersistence = { append: (snapshot) => pi.appendEntry(DAG_STATE_ENTRY, snapshot) };
 
   const reload = (ctx: ExtensionContext): void => {
-    store = new DagStore(persistence, latestSnapshot(ctx) ?? initDagState());
+    const snapshot = latestSnapshot(ctx);
+    store = new DagStore(persistence, snapshot ?? initDagState());
+    // Effects and merges are process-local: a restored snapshot's ephemeral
+    // fields are stale by definition, so run the model's recovery.
+    if (snapshot !== null) store.recover();
   };
   const getStore = (ctx: ExtensionContext): DagStore => {
     if (store === null) reload(ctx);

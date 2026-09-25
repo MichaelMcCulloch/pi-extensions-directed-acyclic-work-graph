@@ -23,6 +23,7 @@ export type DagCommand =
   | { readonly type: "dispatch"; readonly node: NodeId; readonly base: string; readonly worktree: string; readonly branch: string }
   | { readonly type: "finish-worktree"; readonly node: NodeId }
   | { readonly type: "admit"; readonly node: NodeId }
+  | { readonly type: "check-files"; readonly node: NodeId }
   | { readonly type: "complete"; readonly node: NodeId; readonly completedCommit: string }
   | { readonly type: "block"; readonly node: NodeId; readonly reason: string }
   | { readonly type: "underspecify"; readonly node: NodeId; readonly question: string }
@@ -89,6 +90,7 @@ export function abstractSystemState(state: DagState): AbstractSystemState {
     integrated: pick((id) => state.nodes[id]!.integrated),
     registered: pick((id) => state.nodes[id]!.registered),
     merging: pick((id) => state.nodes[id]!.merging),
+    checked: pick((id) => state.nodes[id]!.checked),
   };
 }
 
@@ -101,6 +103,8 @@ export function eventsForCommand(command: DagCommand): SystemEvent[] {
       return [{ type: "finish-worktree", node: command.node }];
     case "admit":
       return [{ type: "admit", node: command.node }];
+    case "check-files":
+      return [{ type: "check-files", node: command.node }];
     case "complete":
       return [{ type: "complete", node: command.node }];
     case "block":
@@ -152,6 +156,7 @@ export function effectsForCommand(command: DagCommand): DagEffect[] {
       return [{ kind: "reconcile-node", node: command.node }];
     case "finish-worktree":
     case "admit":
+    case "check-files":
     case "complete":
     case "block":
     case "underspecify":
@@ -182,6 +187,8 @@ export function isEnabled(state: DagState, event: SystemEvent): boolean {
       return systemGuards["finish-worktree"](abs, event.node);
     case "admit":
       return systemGuards.admit(abs, event.node);
+    case "check-files":
+      return systemGuards["check-files"](abs, event.node);
     case "complete":
     case "block":
     case "underspecify":
@@ -215,7 +222,11 @@ export function isEnabled(state: DagState, event: SystemEvent): boolean {
 
 /** Apply one composed event, recording it as a durable receipt. */
 export function applyEvent(state: DagState, event: SystemEvent): DagState {
-  const after = referenceReduceSystemState(abstractSystemState(state), event, configOf(state));
+  const before = abstractSystemState(state);
+  const after = referenceReduceSystemState(before, event, configOf(state));
+  // A model stutter (crash with no merge in progress, reopen with no live
+  // effect) leaves the machine unchanged; do not burn a revision on it.
+  if (JSON.stringify(before) === JSON.stringify(after)) return state;
   const node = "node" in event ? event.node : null;
   const nodes: Record<NodeId, DagNode> = {};
   for (const id of state.order) {
@@ -233,6 +244,7 @@ export function applyEvent(state: DagState, event: SystemEvent): DagState {
       integrated: after.integrated[id] === true,
       registered: after.registered[id] === true,
       merging: after.merging[id] === true,
+      checked: after.checked[id] === true,
     };
   }
   const revision = state.revision + 1;

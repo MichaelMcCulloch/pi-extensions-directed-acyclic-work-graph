@@ -48,6 +48,10 @@ const admit = (node: string): Step => (store) => {
   store.admit(node);
   return { type: "admit", node };
 };
+const checkFiles = (node: string): Step => (store) => {
+  store.checkFiles(node);
+  return { type: "check-files", node };
+};
 const complete = (node: string): Step => (store) => {
   store.settle(node, "complete", "done", `commit-${node}`);
   return { type: "complete", node };
@@ -114,7 +118,7 @@ const reopen: Step = (store) => {
 };
 
 const boot = (node: string): Step[] => [dispatch(node), finish(node), admit(node)];
-const lifecycle = (node: string): Step[] => [...boot(node), complete(node)];
+const lifecycle = (node: string): Step[] => [...boot(node), checkFiles(node), complete(node)];
 const integration = (node: string): Step[] => [beginMerge(node), commitMerge(node), remove(node)];
 
 /** The scenarios the validator replays, covering every action. */
@@ -129,12 +133,12 @@ export function scenarios(): Scenario[] {
     {
       name: "blocked-resume",
       declaration: DECLARATION,
-      steps: [...boot("n1"), block("n1"), resume("n1"), admit("n1"), complete("n1"), ...integration("n1")],
+      steps: [...boot("n1"), block("n1"), resume("n1"), admit("n1"), checkFiles("n1"), complete("n1"), ...integration("n1")],
     },
     {
       name: "underspecified-resume",
       declaration: DECLARATION,
-      steps: [...boot("n1"), underspecify("n1"), resume("n1"), admit("n1"), complete("n1"), ...integration("n1")],
+      steps: [...boot("n1"), underspecify("n1"), resume("n1"), admit("n1"), checkFiles("n1"), complete("n1"), ...integration("n1")],
     },
     {
       name: "conflict-resolve",
@@ -144,17 +148,17 @@ export function scenarios(): Scenario[] {
     {
       name: "steer-stale",
       declaration: DECLARATION,
-      steps: [...boot("n1"), steer("n1"), effectStale("n1"), admit("n1"), complete("n1"), ...integration("n1")],
+      steps: [...boot("n1"), steer("n1"), effectStale("n1"), admit("n1"), checkFiles("n1"), complete("n1"), ...integration("n1")],
     },
     {
       name: "fail-resume",
       declaration: DECLARATION,
-      steps: [...boot("n1"), fail("n1"), resume("n1"), admit("n1"), complete("n1"), ...integration("n1")],
+      steps: [...boot("n1"), fail("n1"), resume("n1"), admit("n1"), checkFiles("n1"), complete("n1"), ...integration("n1")],
     },
     {
       name: "reopen-reconcile",
       declaration: DECLARATION,
-      steps: [...boot("n1"), reopen, reconcile("n1"), admit("n1"), complete("n1"), ...integration("n1")],
+      steps: [...boot("n1"), reopen, reconcile("n1"), admit("n1"), checkFiles("n1"), complete("n1"), ...integration("n1")],
     },
     { name: "stop-stale", declaration: DECLARATION, steps: [...boot("n1"), stop("n1"), effectStale("n1")] },
   ];
@@ -211,6 +215,7 @@ function tlaState(state: AbstractSystemState): string {
     `, integrated |-> ${record((n) => bool(state.integrated[n] === true))}`,
     `, registered |-> ${record((n) => bool(state.registered[n] === true))}`,
     `, merging |-> ${record((n) => bool(state.merging[n] === true))}`,
+    `, checked |-> ${record((n) => bool(state.checked[n] === true))}`,
     "]",
   ].join(" ");
 }

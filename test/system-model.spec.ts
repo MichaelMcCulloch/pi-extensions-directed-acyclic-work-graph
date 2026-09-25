@@ -36,6 +36,7 @@ function key(state: AbstractSystemState): string {
     nodes.map((n) => state.integrated[n]),
     nodes.map((n) => state.registered[n]),
     nodes.map((n) => state.merging[n]),
+    nodes.map((n) => state.checked[n]),
   ]);
 }
 
@@ -92,6 +93,7 @@ describe("composed DAG system model", () => {
     state = referenceReduceSystemState(state, { type: "dispatch", node: "n1" });
     state = referenceReduceSystemState(state, { type: "finish-worktree", node: "n1" });
     state = referenceReduceSystemState(state, { type: "admit", node: "n1" });
+    state = referenceReduceSystemState(state, { type: "check-files", node: "n1" });
     state = referenceReduceSystemState(state, { type: "complete", node: "n1" });
     // n1 is core-completed, so the scheduler would call n2 ready...
     expect(systemGuards.dispatch(SYSTEM_MODEL, state, "n2")).toBe(false);
@@ -107,6 +109,7 @@ describe("composed DAG system model", () => {
     state = referenceReduceSystemState(state, { type: "dispatch", node: "n1" });
     state = referenceReduceSystemState(state, { type: "finish-worktree", node: "n1" });
     state = referenceReduceSystemState(state, { type: "admit", node: "n1" });
+    state = referenceReduceSystemState(state, { type: "check-files", node: "n1" });
     state = referenceReduceSystemState(state, { type: "complete", node: "n1" });
     expect(() => referenceReduceSystemState(state, { type: "remove", node: "n1" })).toThrow();
     state = referenceReduceSystemState(state, { type: "begin-merge", node: "n1" });

@@ -160,6 +160,10 @@ export interface CompletionCheck {
   readonly ahead: number;
   readonly conflicts: readonly string[];
   readonly reasons: readonly string[];
+  /** The files the completion commit changed, relative to the node base. */
+  readonly changed: readonly string[];
+  /** True when every changed file is inside the node's declared file set. */
+  readonly filesOk: boolean;
 }
 
 /** Validate completion against the node base, not the integration head. */
@@ -171,11 +175,13 @@ export function validateCompletion(
     readonly base: string;
     readonly deps: readonly string[];
     readonly requireCommit: boolean;
+    /** Declared file ownership; empty means the node declares no restriction. */
+    readonly files?: readonly string[];
   },
 ): CompletionCheck {
   const reasons: string[] = [];
   if (!existsSync(worktree)) {
-    return { ok: false, head: null, ahead: 0, conflicts: [], reasons: ["missing-worktree"] };
+    return { ok: false, head: null, ahead: 0, conflicts: [], reasons: ["missing-worktree"], changed: [], filesOk: false };
   }
   const branch = tryGit(worktree, ["symbolic-ref", "--short", "-q", "HEAD"]);
   if (branch !== contract.branch) reasons.push("wrong-branch");
@@ -190,12 +196,21 @@ export function validateCompletion(
     if (head !== null && !isAncestor(repo, dep, head)) reasons.push(`missing-dep:${dep.slice(0, 8)}`);
   }
   let ahead = 0;
+  let changed: string[] = [];
   if (head !== null) {
     const count = tryGit(worktree, ["rev-list", "--count", `${contract.base}..HEAD`]);
     ahead = count === null ? 0 : Number(count);
     if (contract.requireCommit && ahead < 1) reasons.push("no-commit-ahead");
+    changed = (tryGit(worktree, ["diff", "--name-only", `${contract.base}..HEAD`]) ?? "")
+      .split("\n")
+      .filter((line) => line.length > 0);
   }
-  return { ok: reasons.length === 0, head, ahead, conflicts, reasons };
+  // Declared file ownership is a completion contract, not just a declaration
+  // rule: a node must keep its commit inside the files it declared.
+  const declared = contract.files ?? [];
+  const filesOk = declared.length === 0 || changed.every((file) => declared.includes(file));
+  if (!filesOk) reasons.push("touched-undeclared-files");
+  return { ok: reasons.length === 0, head, ahead, conflicts, reasons, changed, filesOk };
 }
 
 /** The result of integrating one node commit into the integration branch. */

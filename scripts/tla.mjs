@@ -87,7 +87,7 @@ function runCommand(command, args) {
   if (result.status !== 0) throw new Error(`${command} ${args.join(" ")} failed`);
 }
 
-const MODELS = [{ name: "DagSystem", config: "DagSystem.cfg", module: "DagSystem.tla" }];
+const MODELS = [{ name: "DagSystem", config: "DagSystemFixture.cfg", module: "DagSystemFixture.tla" }];
 
 async function checkModel(java, jar) {
   const counts = {};

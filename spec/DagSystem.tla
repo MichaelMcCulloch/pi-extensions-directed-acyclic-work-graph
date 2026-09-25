@@ -20,12 +20,11 @@
 
 EXTENDS Naturals, FiniteSets, TLC
 
-Nodes == {"n1", "n2"}
-Edges == {<<"n1", "n2">>}
-Deps(n) == {m \in Nodes : <<m, n>> \in Edges}
-Files == {"f1", "f2"}
+\* Parameterized so the inductive proof is a theorem for every node set,
+\* dependency relation, file universe, and bound -- not only a fixture.
+CONSTANTS Nodes, Edges, Files, MaxGen, MaxDropped
 
-CONSTANTS MaxGen, MaxDropped
+Deps(n) == {m \in Nodes : <<m, n>> \in Edges}
 
 Status == {"pending", "starting", "in_progress", "completed", "blocked",
            "failed", "interrupted", "underspecified"}
@@ -34,10 +33,10 @@ GState == {"absent", "created", "completed", "integrated", "conflicted", "remove
 VARIABLES
     declared, files,
     status, gen, cmd, effect, effectFence, completedGen, dropped,
-    gstate, committed, integrated, registered, merging
+    gstate, committed, integrated, registered, merging, checked
 
 vars == <<declared, files, status, gen, cmd, effect, effectFence, completedGen,
-          dropped, gstate, committed, integrated, registered, merging>>
+          dropped, gstate, committed, integrated, registered, merging, checked>>
 
 TypeOK ==
     /\ declared \in [Nodes -> BOOLEAN]
@@ -54,6 +53,7 @@ TypeOK ==
     /\ integrated \in [Nodes -> BOOLEAN]
     /\ registered \in [Nodes -> BOOLEAN]
     /\ merging \in [Nodes -> BOOLEAN]
+    /\ checked \in [Nodes -> BOOLEAN]
 
 Init ==
     /\ declared = [n \in Nodes |-> FALSE]
@@ -70,6 +70,7 @@ Init ==
     /\ integrated = [n \in Nodes |-> FALSE]
     /\ registered = [n \in Nodes |-> FALSE]
     /\ merging = [n \in Nodes |-> FALSE]
+    /\ checked = [n \in Nodes |-> FALSE]
 
 \* ---------------------------------------------------------------------------
 \* Guards: one named definition each, shared by the actions and the validator
@@ -144,6 +145,10 @@ GuardRemove(n) ==
     /\ gstate[n] = "integrated"
     /\ integrated[n]
 
+GuardCheckFiles(n) ==
+    /\ CanSettle(n)
+    /\ ~checked[n]
+
 GuardReconcile(n) ==
     /\ status[n] = "in_progress"
     /\ effect[n] = "idle"
@@ -158,7 +163,7 @@ DeclareWith(n, f) ==
     /\ files' = [files EXCEPT ![n] = f]
     /\ declared' = [declared EXCEPT ![n] = TRUE]
     /\ UNCHANGED <<status, gen, cmd, effect, effectFence, completedGen, dropped,
-                   gstate, committed, integrated, registered, merging>>
+                   gstate, committed, integrated, registered, merging, checked>>
 
 Declare(n) ==
     \E f \in SUBSET Files: DeclareWith(n, f)
@@ -175,13 +180,13 @@ Dispatch(n) ==
     /\ gstate' = [gstate EXCEPT ![n] = "created"]
     /\ registered' = [registered EXCEPT ![n] = FALSE]
     /\ UNCHANGED <<declared, files, effect, effectFence, completedGen, dropped,
-                   committed, integrated, merging>>
+                   committed, integrated, merging, checked>>
 
 FinishWorktree(n) ==
     /\ GuardFinish(n)
     /\ registered' = [registered EXCEPT ![n] = TRUE]
     /\ UNCHANGED <<declared, files, status, gen, cmd, effect, effectFence,
-                   completedGen, dropped, gstate, committed, integrated, merging>>
+                   completedGen, dropped, gstate, committed, integrated, merging, checked>>
 
 Admit(n) ==
     /\ GuardAdmit(n)
@@ -190,49 +195,56 @@ Admit(n) ==
     /\ effect' = [effect EXCEPT ![n] = "running"]
     /\ effectFence' = [effectFence EXCEPT ![n] = gen[n]]
     /\ UNCHANGED <<declared, files, gen, completedGen, dropped, gstate,
-                   committed, integrated, registered, merging>>
+                   committed, integrated, registered, merging, checked>>
 
 \* ---------------------------------------------------------------------------
 \* Effect outcomes
 \* ---------------------------------------------------------------------------
 
+CheckFiles(n) ==
+    /\ GuardCheckFiles(n)
+    /\ checked' = [checked EXCEPT ![n] = TRUE]
+    /\ UNCHANGED <<declared, files, status, gen, cmd, effect, effectFence,
+                   completedGen, dropped, gstate, committed, integrated, registered, merging>>
+
 Complete(n) ==
     /\ CanSettle(n)
+    /\ checked[n]
     /\ status' = [status EXCEPT ![n] = "completed"]
     /\ completedGen' = [completedGen EXCEPT ![n] = gen[n]]
     /\ effect' = [effect EXCEPT ![n] = "idle"]
     /\ committed' = [committed EXCEPT ![n] = TRUE]
     /\ gstate' = [gstate EXCEPT ![n] = "completed"]
     /\ UNCHANGED <<declared, files, gen, cmd, effectFence, dropped,
-                   integrated, registered, merging>>
+                   integrated, registered, merging, checked>>
 
 Block(n) ==
     /\ CanSettle(n)
     /\ status' = [status EXCEPT ![n] = "blocked"]
     /\ effect' = [effect EXCEPT ![n] = "idle"]
     /\ UNCHANGED <<declared, files, gen, cmd, effectFence, completedGen, dropped,
-                   gstate, committed, integrated, registered, merging>>
+                   gstate, committed, integrated, registered, merging, checked>>
 
 Underspecify(n) ==
     /\ CanSettle(n)
     /\ status' = [status EXCEPT ![n] = "underspecified"]
     /\ effect' = [effect EXCEPT ![n] = "idle"]
     /\ UNCHANGED <<declared, files, gen, cmd, effectFence, completedGen, dropped,
-                   gstate, committed, integrated, registered, merging>>
+                   gstate, committed, integrated, registered, merging, checked>>
 
 Fail(n) ==
     /\ CanSettle(n)
     /\ status' = [status EXCEPT ![n] = "failed"]
     /\ effect' = [effect EXCEPT ![n] = "idle"]
     /\ UNCHANGED <<declared, files, gen, cmd, effectFence, completedGen, dropped,
-                   gstate, committed, integrated, registered, merging>>
+                   gstate, committed, integrated, registered, merging, checked>>
 
 EffectStale(n) ==
     /\ GuardStale(n)
     /\ effect' = [effect EXCEPT ![n] = "idle"]
     /\ dropped' = dropped + 1
     /\ UNCHANGED <<declared, files, status, gen, cmd, effectFence, completedGen,
-                   gstate, committed, integrated, registered, merging>>
+                   gstate, committed, integrated, registered, merging, checked>>
 
 Resume(n) ==
     /\ GuardResume(n)
@@ -240,7 +252,7 @@ Resume(n) ==
     /\ gen' = [gen EXCEPT ![n] = gen[n] + 1]
     /\ cmd' = [cmd EXCEPT ![n] = "accepted"]
     /\ UNCHANGED <<declared, files, effect, effectFence, completedGen, dropped,
-                   gstate, committed, integrated, registered, merging>>
+                   gstate, committed, integrated, registered, merging, checked>>
 
 Steer(n) ==
     /\ GuardSteer(n)
@@ -248,7 +260,7 @@ Steer(n) ==
     /\ gen' = [gen EXCEPT ![n] = gen[n] + 1]
     /\ cmd' = [cmd EXCEPT ![n] = "accepted"]
     /\ UNCHANGED <<declared, files, effect, effectFence, completedGen, dropped,
-                   gstate, committed, integrated, registered, merging>>
+                   gstate, committed, integrated, registered, merging, checked>>
 
 Stop(n) ==
     /\ GuardStop(n)
@@ -256,7 +268,7 @@ Stop(n) ==
     /\ gen' = [gen EXCEPT ![n] = gen[n] + 1]
     /\ cmd' = [cmd EXCEPT ![n] = "none"]
     /\ UNCHANGED <<declared, files, effect, effectFence, completedGen, dropped,
-                   gstate, committed, integrated, registered, merging>>
+                   gstate, committed, integrated, registered, merging, checked>>
 
 \* ---------------------------------------------------------------------------
 \* Integration: two-phase, idempotent, only from a completed node
@@ -266,7 +278,7 @@ BeginMerge(n) ==
     /\ GuardBegin(n)
     /\ merging' = [merging EXCEPT ![n] = TRUE]
     /\ UNCHANGED <<declared, files, status, gen, cmd, effect, effectFence,
-                   completedGen, dropped, gstate, committed, integrated, registered>>
+                   completedGen, dropped, gstate, committed, integrated, registered, checked>>
 
 CommitMerge(n) ==
     /\ GuardCommit(n)
@@ -274,27 +286,27 @@ CommitMerge(n) ==
     /\ merging' = [merging EXCEPT ![n] = FALSE]
     /\ gstate' = [gstate EXCEPT ![n] = "integrated"]
     /\ UNCHANGED <<declared, files, status, gen, cmd, effect, effectFence,
-                   completedGen, dropped, committed, registered>>
+                   completedGen, dropped, committed, registered, checked>>
 
 MergeConflict(n) ==
     /\ GuardConflict(n)
     /\ gstate' = [gstate EXCEPT ![n] = "conflicted"]
     /\ merging' = [merging EXCEPT ![n] = FALSE]
     /\ UNCHANGED <<declared, files, status, gen, cmd, effect, effectFence,
-                   completedGen, dropped, committed, integrated, registered>>
+                   completedGen, dropped, committed, integrated, registered, checked>>
 
 ResolveConflict(n) ==
     /\ GuardResolve(n)
     /\ gstate' = [gstate EXCEPT ![n] = "completed"]
     /\ committed' = [committed EXCEPT ![n] = TRUE]
     /\ UNCHANGED <<declared, files, status, gen, cmd, effect, effectFence,
-                   completedGen, dropped, integrated, registered, merging>>
+                   completedGen, dropped, integrated, registered, merging, checked>>
 
 Remove(n) ==
     /\ GuardRemove(n)
     /\ gstate' = [gstate EXCEPT ![n] = "removed"]
     /\ UNCHANGED <<declared, files, status, gen, cmd, effect, effectFence,
-                   completedGen, dropped, committed, integrated, registered, merging>>
+                   completedGen, dropped, committed, integrated, registered, merging, checked>>
 
 Reconcile(n) ==
     /\ GuardReconcile(n)
@@ -302,23 +314,24 @@ Reconcile(n) ==
     /\ gen' = [gen EXCEPT ![n] = gen[n] + 1]
     /\ cmd' = [cmd EXCEPT ![n] = "accepted"]
     /\ UNCHANGED <<declared, files, effect, effectFence, completedGen, dropped,
-                   gstate, committed, integrated, registered, merging>>
+                   gstate, committed, integrated, registered, merging, checked>>
 
 Crash ==
     /\ merging' = [n \in Nodes |-> FALSE]
     /\ UNCHANGED <<declared, files, status, gen, cmd, effect, effectFence,
-                   completedGen, dropped, gstate, committed, integrated, registered>>
+                   completedGen, dropped, gstate, committed, integrated, registered, checked>>
 
 Reopen ==
     /\ effect' = [n \in Nodes |-> "idle"]
     /\ UNCHANGED <<declared, files, status, gen, cmd, effectFence, completedGen,
-                   dropped, gstate, committed, integrated, registered, merging>>
+                   dropped, gstate, committed, integrated, registered, merging, checked>>
 
 Next ==
     \/ \E n \in Nodes: Declare(n)
     \/ \E n \in Nodes: Dispatch(n)
     \/ \E n \in Nodes: FinishWorktree(n)
     \/ \E n \in Nodes: Admit(n)
+    \/ \E n \in Nodes: CheckFiles(n)
     \/ \E n \in Nodes: Complete(n)
     \/ \E n \in Nodes: Block(n)
     \/ \E n \in Nodes: Underspecify(n)
@@ -350,7 +363,8 @@ CoreInv ==
          /\ (effect[n] = "running" /\ effectFence[n] < gen[n]
              => status[n] \in {"starting", "interrupted"})
          /\ (status[n] = "completed"
-             => effect[n] = "idle" /\ cmd[n] = "none" /\ completedGen[n] = gen[n])
+             => effect[n] = "idle" /\ cmd[n] = "none" /\ completedGen[n] = gen[n]
+                /\ checked[n])
          /\ (status[n] \in {"blocked", "underspecified"}
              => effect[n] = "idle" /\ cmd[n] = "none")
          /\ effectFence[n] <= gen[n]
@@ -375,7 +389,44 @@ CouplingInv ==
 FileOwnership ==
     \A m \in Nodes: \A k \in Nodes: m # k => files[m] \cap files[k] = {}
 
+\* ---------------------------------------------------------------------------
+\* Strengthenings required for induction (true in every reachable state, but
+\* not implied by the invariants above; discovered by the TLAPS proof).
+\* ---------------------------------------------------------------------------
+
+\* Only a declared node may hold files, so a fresh declaration is disjoint from
+\* every other node's files. Without this, FileOwnership is not inductive.
+UndeclaredFree ==
+    \A n \in Nodes: ~declared[n] => files[n] = {}
+
+\* A node that has left pending has already had every dependency integrated
+\* (and integrated never decreases). Without this, the invariant is not
+\* preserved when a suspended node is resumed, steered, stopped, or reconciled.
+DepsIntegratedBeyondPending ==
+    \A n \in Nodes: status[n] # "pending" => \A d \in Deps(n): integrated[d]
+
+\* A node in a suspended state still owns its live worktree. Without this,
+\* steering a suspended node back to "starting" can lose the worktree fact.
+SuspendedHasWorktree ==
+    \A n \in Nodes:
+        status[n] \in {"blocked", "interrupted", "failed", "underspecified"}
+            => gstate[n] = "created"
+
+\* A node that has ever left pending was declared (declared never clears).
+\* Needed when a finished node enters the merge phase: the new git state is
+\* not "absent", so the node must be declared.
+DispatchedDeclared ==
+    \A n \in Nodes: status[n] # "pending" => declared[n]
+
+\* A node being merged is not yet integrated (BeginMerge requires ~integrated
+\* and commit/conflict both clear the merging flag). Needed so a conflict cannot
+\* leave an integrated node in the "conflicted" state.
+MergingExcludesIntegrated ==
+    \A n \in Nodes: merging[n] => ~integrated[n]
+
 Inv == TypeOK /\ CoreInv /\ GitInv /\ CouplingInv /\ FileOwnership
+       /\ UndeclaredFree /\ DepsIntegratedBeyondPending /\ SuspendedHasWorktree
+       /\ DispatchedDeclared /\ MergingExcludesIntegrated
 
 \* ---------------------------------------------------------------------------
 \* Liveness

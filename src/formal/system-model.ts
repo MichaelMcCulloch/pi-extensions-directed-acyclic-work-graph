@@ -25,6 +25,14 @@ export type SystemStatus =
   | "interrupted"
   | "underspecified";
 
+/** Statuses in which a node is suspended with its worktree still intact. */
+const SUSPENDED_STATUSES: ReadonlySet<SystemStatus> = new Set([
+  "blocked",
+  "interrupted",
+  "failed",
+  "underspecified",
+]);
+
 /** The worktree/integration phase of a node. */
 export type GitPhase = "absent" | "created" | "completed" | "integrated" | "conflicted" | "removed";
 
@@ -37,7 +45,7 @@ export interface SystemModelConfig {
   readonly maxDropped: number;
 }
 
-/** The bounds used by `spec/DagSystem.cfg`. */
+/** The bounds used by the TLC fixture `spec/DagSystemFixture.tla`. */
 export const SYSTEM_MODEL: SystemModelConfig = {
   nodes: ["n1", "n2"],
   deps: { n1: [], n2: ["n1"] },
@@ -62,6 +70,8 @@ export interface AbstractSystemState {
   readonly integrated: Readonly<Record<NodeId, boolean>>;
   readonly registered: Readonly<Record<NodeId, boolean>>;
   readonly merging: Readonly<Record<NodeId, boolean>>;
+  /** The dispatcher validated that the completion commit touched only declared files. */
+  readonly checked: Readonly<Record<NodeId, boolean>>;
 }
 
 /** The event alphabet. */
@@ -70,6 +80,7 @@ export type SystemEvent =
   | { readonly type: "dispatch"; readonly node: NodeId }
   | { readonly type: "finish-worktree"; readonly node: NodeId }
   | { readonly type: "admit"; readonly node: NodeId }
+  | { readonly type: "check-files"; readonly node: NodeId }
   | { readonly type: "complete"; readonly node: NodeId }
   | { readonly type: "block"; readonly node: NodeId }
   | { readonly type: "underspecify"; readonly node: NodeId }
@@ -95,6 +106,7 @@ export const SYSTEM_ACTIONS: readonly SystemAction[] = [
   "dispatch",
   "finish-worktree",
   "admit",
+  "check-files",
   "complete",
   "block",
   "underspecify",
@@ -128,6 +140,7 @@ export function initAbstractSystemState(config: SystemModelConfig = SYSTEM_MODEL
   const integrated: Record<NodeId, boolean> = {};
   const registered: Record<NodeId, boolean> = {};
   const merging: Record<NodeId, boolean> = {};
+  const checked: Record<NodeId, boolean> = {};
   for (const node of config.nodes) {
     declared[node] = false;
     files[node] = [];
@@ -142,6 +155,7 @@ export function initAbstractSystemState(config: SystemModelConfig = SYSTEM_MODEL
     integrated[node] = false;
     registered[node] = false;
     merging[node] = false;
+    checked[node] = false;
   }
   return {
     declared,
@@ -158,6 +172,7 @@ export function initAbstractSystemState(config: SystemModelConfig = SYSTEM_MODEL
     integrated,
     registered,
     merging,
+    checked,
   };
 }
 
@@ -210,6 +225,12 @@ export const systemGuards = {
 
   "finish-worktree": (state: AbstractSystemState, node: NodeId): boolean =>
     state.gstate[node] === "created" && state.registered[node] !== true,
+
+  "check-files": (state: AbstractSystemState, node: NodeId): boolean =>
+    state.effect[node] === "running" &&
+    state.effectFence[node] === state.gen[node] &&
+    state.status[node] === "in_progress" &&
+    state.checked[node] !== true,
 
   admit: (state: AbstractSystemState, node: NodeId): boolean =>
     state.cmd[node] === "accepted" &&
@@ -311,8 +332,15 @@ export function referenceReduceSystemState(
         effect: set(state.effect, event.node, "running"),
         effectFence: set(state.effectFence, event.node, state.gen[event.node]!),
       };
+    case "check-files":
+      require(systemGuards["check-files"](state, event.node), "check-files-not-enabled", event.node);
+      return { ...state, checked: set(state.checked, event.node, true) };
     case "complete":
-      require(systemGuards.settle(state, event.node), "complete-not-enabled", event.node);
+      require(
+        systemGuards.settle(state, event.node) && state.checked[event.node] === true,
+        "complete-not-enabled",
+        event.node,
+      );
       return {
         ...state,
         status: set(state.status, event.node, "completed"),
@@ -441,8 +469,9 @@ export function enabledSystemEvents(
     if (systemGuards.dispatch(config, state, node)) events.push({ type: "dispatch", node });
     if (systemGuards["finish-worktree"](state, node)) events.push({ type: "finish-worktree", node });
     if (systemGuards.admit(state, node)) events.push({ type: "admit", node });
+    if (systemGuards["check-files"](state, node)) events.push({ type: "check-files", node });
     if (systemGuards.settle(state, node)) {
-      events.push({ type: "complete", node });
+      if (state.checked[node] === true) events.push({ type: "complete", node });
       events.push({ type: "block", node });
       events.push({ type: "underspecify", node });
       events.push({ type: "fail", node });
@@ -496,6 +525,9 @@ export function systemInvariantViolations(
     if (status === "completed" && (effect !== "idle" || cmd !== "none" || state.completedGen[node] !== gen)) {
       push("CompletedImpliesIdle", `${node} completed with active work or wrong completedGen`);
     }
+    if (status === "completed" && state.checked[node] !== true) {
+      push("CompletedFilesChecked", `${node} completed without a declared-file check`);
+    }
     if ((status === "blocked" || status === "underspecified") && (effect !== "idle" || cmd !== "none")) {
       push("SuspendedImpliesIdle", `${node} suspended with active work`);
     }
@@ -543,6 +575,24 @@ export function systemInvariantViolations(
     for (const file of state.files[node] ?? []) {
       if (!config.fileUniverse.includes(file)) push("FileUniverse", `${node} claims unknown file ${file}`);
     }
+
+    // Induction strengthenings: true of every reachable state, needed to make
+    // the safety invariant inductive for arbitrary node sets (see DagSystemProof).
+    if (state.declared[node] !== true && (state.files[node] ?? []).length > 0) {
+      push("UndeclaredFree", `${node} holds files while undeclared`);
+    }
+    if (status !== "pending" && !depsIntegrated(config, state, node)) {
+      push("DepsIntegratedBeyondPending", `${node} left pending before its dependencies were integrated`);
+    }
+    if (SUSPENDED_STATUSES.has(status) && phase !== "created") {
+      push("SuspendedHasWorktree", `${node} suspended (${status}) without a live worktree (${phase})`);
+    }
+    if (status !== "pending" && state.declared[node] !== true) {
+      push("DispatchedDeclared", `${node} left pending while undeclared`);
+    }
+    if (state.merging[node] === true && state.integrated[node] === true) {
+      push("MergingExcludesIntegrated", `${node} is merging and already integrated`);
+    }
   }
   if (state.dropped < 0 || state.dropped > config.maxDropped) push("DroppedBound", `dropped ${state.dropped}`);
   return out;
@@ -555,6 +605,7 @@ export const SYSTEM_INVARIANT_NAMES: readonly string[] = [
   "EffectRunningImpliesLive",
   "StaleOnlyAfterInvalidation",
   "CompletedImpliesIdle",
+  "CompletedFilesChecked",
   "SuspendedImpliesIdle",
   "FenceBound",
   "NoLostWork",
@@ -570,5 +621,10 @@ export const SYSTEM_INVARIANT_NAMES: readonly string[] = [
   "WorktreeDeclared",
   "FileOwnership",
   "FileUniverse",
+  "UndeclaredFree",
+  "DepsIntegratedBeyondPending",
+  "SuspendedHasWorktree",
+  "DispatchedDeclared",
+  "MergingExcludesIntegrated",
   "DroppedBound",
 ];

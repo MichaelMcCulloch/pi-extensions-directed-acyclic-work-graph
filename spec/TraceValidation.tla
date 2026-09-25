@@ -5,7 +5,7 @@
 \* guards of DagSystem, so there is one definition of "enabled".
 \* -----------------------------------------------------------------
 
-EXTENDS DagSystem, TracesData, Naturals, Sequences, FiniteSets
+EXTENDS DagSystemFixture, TracesData, Naturals, Sequences, FiniteSets
 
 VARIABLES traceNo, traceIndex, error
 
@@ -16,17 +16,18 @@ state ==
       cmd |-> cmd, effect |-> effect, effectFence |-> effectFence,
       completedGen |-> completedGen, dropped |-> dropped, gstate |-> gstate,
       committed |-> committed, integrated |-> integrated,
-      registered |-> registered, merging |-> merging ]
+      registered |-> registered, merging |-> merging, checked |-> checked ]
 
 machineVars == <<declared, files, status, gen, cmd, effect, effectFence,
                 completedGen, dropped, gstate, committed, integrated,
-                registered, merging>>
+                registered, merging, checked>>
 
 ActionOf(ev) ==
     \/ (ev.type = "declare"          /\ DeclareWith(ev.node, ev.files))
     \/ (ev.type = "dispatch"         /\ Dispatch(ev.node))
     \/ (ev.type = "finish-worktree"  /\ FinishWorktree(ev.node))
     \/ (ev.type = "admit"            /\ Admit(ev.node))
+    \/ (ev.type = "check-files"      /\ CheckFiles(ev.node))
     \/ (ev.type = "complete"         /\ Complete(ev.node))
     \/ (ev.type = "block"            /\ Block(ev.node))
     \/ (ev.type = "underspecify"     /\ Underspecify(ev.node))
@@ -49,6 +50,7 @@ GuardOf(ev) ==
     \/ (ev.type = "dispatch"         /\ CanDispatch(ev.node))
     \/ (ev.type = "finish-worktree"  /\ GuardFinish(ev.node))
     \/ (ev.type = "admit"            /\ GuardAdmit(ev.node))
+    \/ (ev.type = "check-files"      /\ GuardCheckFiles(ev.node))
     \/ (ev.type \in {"complete", "block", "underspecify", "fail"} /\ CanSettle(ev.node))
     \/ (ev.type = "effect-stale"     /\ GuardStale(ev.node))
     \/ (ev.type = "resume"           /\ GuardResume(ev.node))
@@ -78,6 +80,7 @@ AssignState(s) ==
     /\ integrated = s.integrated
     /\ registered = s.registered
     /\ merging = s.merging
+    /\ checked = s.checked
 
 TraceInit ==
     /\ traceNo \in 1..Len(Traces)

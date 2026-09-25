@@ -1,10 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { conflictedFiles, git } from "../src/engine/git.ts";
+import { existsSync } from "node:fs";
 import type { NodeDeclaration } from "../src/engine/state.ts";
-import { DagDispatcher, type NodeOutcomeKind, type NodeReport, type ResolveRequest, type SpawnRequest, type Spawner } from "../src/extension/dispatcher.ts";
+import { DagDispatcher, PiSpawner, type NodeOutcomeKind, type NodeReport, type ResolveRequest, type SpawnRequest, type Spawner } from "../src/extension/dispatcher.ts";
 import { DagStore } from "../src/extension/store.ts";
 import { modelDeclarations } from "./helpers.ts";
 
@@ -28,11 +29,12 @@ class FakeSpawner implements Spawner {
   public constructor(
     private readonly outcome: NodeOutcomeKind = "complete",
     private readonly conflicting = false,
+    private readonly file?: string,
   ) {}
 
   public async spawn(request: SpawnRequest): Promise<NodeReport> {
     if (this.outcome === "complete") {
-      const file = this.conflicting ? "shared.txt" : `${request.node}.txt`;
+      const file = this.file ?? (this.conflicting ? "shared.txt" : `${request.node}.txt`);
       writeFileSync(join(request.worktree, file), `${request.node}\n`);
       git(request.worktree, ["add", "."]);
       git(request.worktree, ["commit", "-m", `work ${request.node}`]);
@@ -82,6 +84,7 @@ describe("dag dispatcher", () => {
     store.dispatch("n1", { base: "b", worktree: "/wt/n1", branch: "b/n1" });
     store.finishWorktree("n1");
     store.admit("n1");
+    store.checkFiles("n1");
     store.settle("n1", "complete", "manual", "commit-n1");
     expect(store.canDispatch("n2")).toBe(false);
     const results = await dispatcher.run(["n2"], 1);
@@ -138,4 +141,79 @@ describe("dag dispatcher", () => {
     expect(readFileSync(join(repo, "shared.txt"), "utf8")).toBe("n2\n");
     expect(store.violations()).toEqual([]);
   });
+
+  it("enforces declared file ownership at completion", async () => {
+    const declared: NodeDeclaration[] = [
+      { id: "n1", content: "x", brief: "VALIDATION: a. ACCEPTANCE: b.", deps: [], files: ["declared.txt"] },
+    ];
+    const { store, dispatcher } = setup({ declarations: declared, spawner: new FakeSpawner("complete", false, "other.txt") });
+    const results = await dispatcher.run(["n1"], 1);
+    expect(results[0]?.outcome).toBe("invalid");
+    expect(results[0]?.reasons).toContain("touched-undeclared-files");
+    expect(store.state.nodes["n1"]?.status).toBe("failed");
+    expect(store.violations()).toEqual([]);
+  });
+
+  it("accepts a completion inside the declared files", async () => {
+    const declared: NodeDeclaration[] = [
+      { id: "n1", content: "x", brief: "VALIDATION: a. ACCEPTANCE: b.", deps: [], files: ["declared.txt"] },
+    ];
+    const { repo, dispatcher } = setup({ declarations: declared, spawner: new FakeSpawner("complete", false, "declared.txt") });
+    expect((await dispatcher.run(["n1"], 1))[0]?.outcome).toBe("integrated");
+    expect(existsSync(join(repo, "declared.txt"))).toBe(true);
+  });
+
+  it("maps a locked git index onto the model instead of throwing", async () => {
+    const repo = tempRepo();
+    const store = new DagStore({ append() {} });
+    store.declare(modelDeclarations());
+    const dispatcher = new DagDispatcher(store, repo, new LockingSpawner(repo));
+    const results = await dispatcher.run(["n1"], 1);
+    expect(results[0]?.outcome).toBe("conflicted");
+    expect(results[0]?.reasons.join(" ")).toContain("merge-io-error");
+    expect(store.violations()).toEqual([]);
+    rmSync(join(repo, ".git/index.lock"), { force: true });
+  });
+
+  it("refuses an overlapping dispatch", async () => {
+    const repo = tempRepo();
+    const store = new DagStore({ append() {} });
+    store.declare(modelDeclarations());
+    let release: (() => void) | undefined;
+    const hanging: Spawner = {
+      spawn: () => new Promise<NodeReport>((resolve) => {
+        release = () => resolve({ outcome: "blocked", summary: "released" });
+      }),
+    };
+    const dispatcher = new DagDispatcher(store, repo, hanging);
+    const first = dispatcher.run(["n1"], 1);
+    await expect(dispatcher.run(["n2"], 1)).rejects.toThrow(/already running/);
+    release?.();
+    await first;
+  });
+
+  it("bounds a hung child with a hard timeout", async () => {
+    const repo = tempRepo();
+    const script = join(repo, "slow.sh");
+    writeFileSync(script, "#!/bin/sh\nsleep 30\n");
+    chmodSync(script, 0o755);
+    const spawner = new PiSpawner(script, 200);
+    const report = await spawner.spawn({ node: "n1", brief: "x", worktree: repo, resultPath: join(repo, "r.json"), generation: 1 });
+    expect(report.outcome).toBe("failed");
+    expect(report.summary).toContain("timeout");
+  });
 });
+
+/** A spawner that commits a file and then locks the git index. */
+class LockingSpawner implements Spawner {
+  public constructor(private readonly repo: string) {}
+
+  public async spawn(request: SpawnRequest): Promise<NodeReport> {
+    writeFileSync(join(request.worktree, `${request.node}.txt`), `${request.node}\n`);
+    git(request.worktree, ["add", "."]);
+    git(request.worktree, ["commit", "-m", `work ${request.node}`]);
+    // Lock the integration repository's index so the merge fails at the I/O layer.
+    writeFileSync(join(this.repo, ".git", "index.lock"), "");
+    return { outcome: "complete", summary: "done" };
+  }
+}

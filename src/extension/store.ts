@@ -132,6 +132,11 @@ export class DagStore {
     };
   }
 
+  /** Record that the dispatcher validated the completion against declared files. */
+  public checkFiles(node: NodeId): OperationResult {
+    return this.#apply({ type: "check-files", node });
+  }
+
   /** Begin the two-phase integration. */
   public beginMerge(node: NodeId): OperationResult {
     return this.#apply({ type: "begin-merge", node });
@@ -176,6 +181,9 @@ export class DagStore {
 
   /** Recover after process death: drop effects and re-arm in-progress nodes. */
   public recover(): OperationResult {
+    // Process death clears both process-local domains: in-progress merges and
+    // running effects. Then in-progress nodes are re-armed from durable state.
+    this.#reduce({ type: "crash" });
     this.#reduce({ type: "reopen" });
     for (const id of this.#state.order) {
       if (isEnabled(this.#state, { type: "reconcile", node: id })) {
@@ -193,8 +201,10 @@ export class DagStore {
   #reduce(command: DagCommand): ReduceResult {
     try {
       const result = reduceCommand(this.#state, command);
-      this.#state = result.state;
-      this.#commit();
+      if (result.state !== this.#state) {
+        this.#state = result.state;
+        this.#commit();
+      }
       return result;
     } catch (error) {
       if (error instanceof DagSystemError) {
