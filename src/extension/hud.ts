@@ -175,12 +175,19 @@ export function renderDagDetail(
   return lines;
 }
 
+/** A full-width rule, dimmed when a theme is available. */
+function separator(width: number, theme: Theme | undefined): string {
+  const line = "─".repeat(Math.max(0, width));
+  return theme === undefined ? line : theme.fg("borderMuted", line);
+}
+
 /** The persistent widget. `lines` is read on every render so it is always live. */
 export class DagWidget implements Component {
   public constructor(
     private readonly lines: () => string[],
     private readonly maxLines = 12,
     private readonly onActivate?: () => void,
+    private readonly getTheme?: () => Theme,
   ) {}
 
   public invalidate(): void {
@@ -200,7 +207,9 @@ export class DagWidget implements Component {
     if (body.length === 0) return [];
     const shown = body.slice(0, this.maxLines);
     if (body.length > this.maxLines) shown.push(`… +${body.length - this.maxLines} more — click to open`);
-    return shown.map((line) => truncateToWidth(line, width, "…", true));
+    const fitted = shown.map((line) => truncateToWidth(line, width, "…", true));
+    fitted.push(separator(width, this.getTheme?.()));
+    return fitted;
   }
 }
 
