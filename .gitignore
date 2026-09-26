@@ -16,3 +16,6 @@ spec/*_TTrace_*.bin
 spec/.tlacache/
 spec/*.thy
 spec/*.tla.cache
+
+# Local tool state (message board, etc.)
+.pi/message-board/
