@@ -79,7 +79,7 @@ describe("dag tool", () => {
     const store = new DagStore({ append() {} });
     store.declare(modelDeclarations());
     const result = await tool(store).execute!("c", { action: "plan" }, undefined, undefined, ctx);
-    expect(text(result)).toBe("plan: w1 n1 → w2 n2 → w3 n3");
+    expect(text(result)).toBe("plan: w1 n1 (ready) → w2 n2 (pending) → w3 n3 (pending)");
   });
 
   it("blocks and unblocks a pending node", async () => {

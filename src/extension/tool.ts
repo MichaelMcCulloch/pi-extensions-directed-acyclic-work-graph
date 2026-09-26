@@ -14,7 +14,7 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { NodeDeclaration } from "../engine/state.ts";
+import type { DeclarationInput } from "../engine/state.ts";
 import type { DagDispatcher } from "./dispatcher.ts";
 import type { DeclarationResult, DagStore } from "./store.ts";
 import { DagOperationError } from "./store.ts";
@@ -38,9 +38,12 @@ export const DAG_ACTIONS = [
 
 const NodeDeclarationSchema = Type.Object({
   id: Type.String({ description: "Stable node id." }),
-  content: Type.String({ description: "What the node must produce." }),
-  brief: Type.String({ description: "Must contain VALIDATION: and ACCEPTANCE: sections." }),
-  deps: Type.Array(Type.String(), { description: "Node ids this node waits for." }),
+  content: Type.Optional(Type.String({ description: "What the node must produce." })),
+  brief: Type.Optional(Type.String({ description: "Must contain VALIDATION: and ACCEPTANCE: sections." })),
+  deps: Type.Optional(Type.Array(Type.String(), { description: "Node ids this node waits for." })),
+  keep: Type.Optional(
+    Type.Boolean({ description: "Keep this existing node's definition verbatim; do not restate its body." }),
+  ),
   kind: Type.Optional(StringEnum(["task", "integration"] as const)),
   files: Type.Optional(Type.Array(Type.String(), { description: "Declared files; exclusive across the graph." })),
   policy: Type.Optional(
@@ -99,6 +102,7 @@ export function buildDagTool(
       "Declare the whole graph with dag action=write once; re-running the same declaration is safe and changes nothing.",
       "Use dag action=run with no node_ids to dispatch every ready node; add follow=true to keep dispatching waves until idle.",
       "Snapshot before a big re-declaration with dry_run=true to see added/updated/orphaned/edges.",
+      "To restate the whole graph without replaying finished bodies, list { id, keep: true } for the nodes you are not changing.",
     ],
     parameters: DagParams,
     executionMode: "sequential",
@@ -125,7 +129,7 @@ export function buildDagTool(
         }
         if (params.action === "write" || params.action === "add") {
           if (params.nodes === undefined) throw new DagOperationError("dag-missing-nodes", `${params.action} requires the node list`);
-          const result = store.declare(params.nodes as readonly NodeDeclaration[], {
+          const result = store.declare(params.nodes as readonly DeclarationInput[], {
             mode: params.action === "add" ? "add" : "write",
             prune: params.prune === true,
             dryRun: params.dry_run === true,
@@ -276,5 +280,14 @@ function renderBoard(store: DagStore): string {
 function renderPlan(store: DagStore): string {
   const plan = store.plan;
   if (plan.waves.length === 0) return "plan: (no active nodes)";
-  return `plan: ${plan.waves.map((wave) => `w${wave.index} ${wave.nodes.join(", ")}`).join(" → ")}`;
+  return `plan: ${plan.waves
+    .map((wave) => `w${wave.index} ${wave.nodes.map(planLabel).join(", ")}`)
+    .join(" → ")}`;
+}
+
+function planLabel(node: { id: string; status: string; ready: boolean; blockedReason: string | null; staleReason: string | null }): string {
+  if (node.status === "parked") return `${node.id} (parked${node.blockedReason ? `: ${node.blockedReason}` : ""})`;
+  if (node.status === "stale") return `${node.id} (stale${node.staleReason ? `: ${node.staleReason}` : ""})`;
+  if (node.status === "pending" && node.ready) return `${node.id} (ready)`;
+  return `${node.id} (${node.status})`;
 }

@@ -226,7 +226,7 @@ One tool with an `action` discriminator. State is stored in the pi session as a
 
 | Action | Effect |
 |---|---|
-| `write` | declare the complete node list; merge-by-id, absent nodes are `orphaned` (or `prune`d), unchanged nodes are untouched |
+| `write` | declare the complete node list; merge-by-id, absent nodes are `orphaned` (or `prune`d), unchanged nodes are untouched, and `{ id, keep: true }` restates an existing node without replaying its body |
 | `add` | upsert a subset of nodes without disturbing absent ones |
 | `edit` | change one node's definition; a finished node is marked `stale` (reset it to re-run) and a running node is refused |
 | `link` / `unlink` | add or remove dependency edges on a pending node |
@@ -234,7 +234,7 @@ One tool with an `action` discriminator. State is stored in the pi session as a
 | `block` / `unblock` | park a pending node on an external condition; dependents wait rather than fail |
 | `reset` | return a `stale` node to pending so its new definition can run |
 | `status` | read the board, counts, ready set, and per-node readiness explanations |
-| `plan` | the topologically ordered future waves, including parked nodes |
+| `plan` | the topologically ordered future waves, each node annotated with its status (`ready`, `completed`, `parked: …`) |
 | `inspect` | read one node's durable execution facts |
 | `run` | dispatch every ready node (or the named ids) into git worktrees, spawn a nested `pi`, validate its commit, integrate it, and settle the node; `follow` keeps dispatching as completions unlock dependents |
 

@@ -191,7 +191,7 @@ describe("link/unlink and plan", () => {
   it("reports the topologically ordered waves", () => {
     const s = store();
     s.declare(modelDeclarations());
-    expect(s.plan.waves).toEqual([
+    expect(s.plan.waves.map((wave) => ({ index: wave.index, nodes: wave.nodes.map((n) => n.id) }))).toEqual([
       { index: 1, nodes: ["n1"] },
       { index: 2, nodes: ["n2"] },
       { index: 3, nodes: ["n3"] },
@@ -204,5 +204,25 @@ describe("link/unlink and plan", () => {
       { id: "a", content: "a", brief: "EXTERNAL: a release. VALIDATION: x. ACCEPTANCE: y.", deps: [] },
     ]);
     expect(result.warnings.length).toBe(1);
+  });
+
+  it("keeps an existing definition verbatim with keep: true", () => {
+    const s = store();
+    s.declare([node("a"), node("b", ["a"])]);
+    dispatch(s, "a");
+    s.checkFiles("a");
+    s.settle("a", "complete", "done", "commit-a");
+    s.beginMerge("a");
+    s.recordMerge("a", "merge-a");
+    // Re-state the graph without replaying a's finished body; b is unchanged too.
+    const result = s.declare([{ id: "a", keep: true }, { id: "b", keep: true }]);
+    expect(result.diff.unchanged).toEqual(["a", "b"]);
+    expect(s.state.nodes["a"]!.content).toBe("a work");
+    expect(s.state.nodes["a"]!.integrated).toBe(true);
+  });
+
+  it("refuses keep: true for an unknown node", () => {
+    const s = store();
+    expect(() => s.declare([{ id: "ghost", keep: true }])).toThrow(DagOperationError);
   });
 });

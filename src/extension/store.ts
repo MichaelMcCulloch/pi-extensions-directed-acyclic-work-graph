@@ -18,11 +18,13 @@ import { isEnabled, reduceCommand, type DagCommand, type DagEffect, type ReduceR
 import {
   initDagState,
   normalizeDagState,
+  resolveDeclarations,
   validateDeclaration,
   type DagNode,
   type DagState,
   type DeclarationDiff,
   type DeclarationEvent,
+  type DeclarationInput,
   type DeclarationOptions,
   type NodeDeclaration,
   type NodeId,
@@ -147,16 +149,18 @@ export class DagStore {
    * Unchanged nodes are untouched. A definition change to a node that has left
    * pending marks it `stale`; an integrated node's definition cannot change.
    */
-  public declare(declaration: readonly NodeDeclaration[], options: DeclareOptions = {}): DeclarationResult {
+  public declare(declaration: readonly DeclarationInput[], options: DeclareOptions = {}): DeclarationResult {
     if (options.expectRevision !== undefined && options.expectRevision !== this.#state.revision) {
       throw new DagOperationError(
         "dag-stale-revision",
         `expected revision ${options.expectRevision}, current revision is ${this.#state.revision}`,
       );
     }
-    const validation = validateDeclaration(this.#state, declaration, options);
-    if (validation.errors.length > 0) {
-      throw new DagOperationError("dag-invalid-declaration", validation.errors.join("; "));
+    const resolved = resolveDeclarations(this.#state, declaration);
+    const validation = validateDeclaration(this.#state, resolved.declarations, options);
+    const errors = [...resolved.errors, ...validation.errors];
+    if (errors.length > 0) {
+      throw new DagOperationError("dag-invalid-declaration", errors.join("; "));
     }
     if (options.dryRun === true) {
       return {
@@ -180,7 +184,7 @@ export class DagStore {
   }
 
   /** Upsert a subset of nodes without disturbing absent ones. */
-  public add(declaration: readonly NodeDeclaration[], options: DeclareOptions = {}): DeclarationResult {
+  public add(declaration: readonly DeclarationInput[], options: DeclareOptions = {}): DeclarationResult {
     return this.declare(declaration, { ...options, mode: "add" });
   }
 

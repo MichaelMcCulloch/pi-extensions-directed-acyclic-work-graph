@@ -48,6 +48,21 @@ export interface NodeDeclaration {
   readonly noop?: boolean;
 }
 
+/**
+ * A declaration entry that keeps an existing node's definition verbatim.
+ *
+ * Re-stating the whole graph should not require replaying finished bodies:
+ * `{ id, keep: true }` is enough, and it is byte-exact by construction, so it
+ * can never trip the "cannot change an integrated node" gate.
+ */
+export interface KeepDeclaration {
+  readonly id: NodeId;
+  readonly keep: true;
+}
+
+/** What `write`/`add` accept: a full declaration or a keep shorthand. */
+export type DeclarationInput = NodeDeclaration | KeepDeclaration;
+
 /** A declared node and its slice of the composed machine. */
 export interface DagNode {
   // Declaration
@@ -358,6 +373,45 @@ function emptyDiff(): DeclarationDiff & { added: NodeId[]; adopted: NodeId[]; up
 function difference(left: readonly string[], right: readonly string[]): string[] {
   const rightSet = new Set(right);
   return left.filter((value) => !rightSet.has(value));
+}
+
+/**
+ * Resolve keep shorthands against the live graph, producing full declarations.
+ * Errors are returned rather than thrown so the store can refuse atomically.
+ */
+export function resolveDeclarations(
+  state: DagState,
+  inputs: readonly DeclarationInput[],
+): { declarations: NodeDeclaration[]; errors: string[] } {
+  const declarations: NodeDeclaration[] = [];
+  const errors: string[] = [];
+  for (const input of inputs) {
+    if ((input as KeepDeclaration).keep === true) {
+      const existing = state.nodes[input.id];
+      if (existing === undefined) {
+        errors.push(`${input.id}: keep requires an existing node`);
+        continue;
+      }
+      declarations.push({
+        id: existing.id,
+        content: existing.content,
+        brief: existing.brief,
+        deps: existing.deps,
+        kind: existing.kind,
+        files: existing.files,
+        policy: existing.policy,
+        noop: existing.noop,
+      });
+      continue;
+    }
+    const candidate = input as NodeDeclaration;
+    if (typeof candidate.content !== "string" || typeof candidate.brief !== "string" || !Array.isArray(candidate.deps)) {
+      errors.push(`${input.id}: a declaration needs content, brief, and deps, or keep: true`);
+      continue;
+    }
+    declarations.push(candidate);
+  }
+  return { declarations, errors };
 }
 
 /**

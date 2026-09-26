@@ -35,9 +35,18 @@ export interface DagBoard {
   readonly nodes: readonly BoardNode[];
 }
 
+/** One node in a planned wave, annotated with its current lifecycle state. */
+export interface PlanNode {
+  readonly id: NodeId;
+  readonly status: SystemStatus;
+  readonly ready: boolean;
+  readonly blockedReason: string | null;
+  readonly staleReason: string | null;
+}
+
 /** The topologically ordered future waves, including parked/blocked nodes. */
 export interface DagPlan {
-  readonly waves: readonly { readonly index: number; readonly nodes: readonly NodeId[] }[];
+  readonly waves: readonly { readonly index: number; readonly nodes: readonly PlanNode[] }[];
 }
 
 function emptyCounts(): Record<SystemStatus, number> {
@@ -123,9 +132,20 @@ export function projectPlan(state: DagState): DagPlan {
   };
   for (const id of active) compute(id);
   const max = active.reduce((best, id) => Math.max(best, depth.get(id) ?? 1), 0);
-  const waves: { index: number; nodes: NodeId[] }[] = [];
+  const waves: { index: number; nodes: PlanNode[] }[] = [];
   for (let index = 1; index <= max; index += 1) {
-    const nodes = active.filter((id) => (depth.get(id) ?? 1) === index);
+    const nodes = active
+      .filter((id) => (depth.get(id) ?? 1) === index)
+      .map((id) => {
+        const node = state.nodes[id]!;
+        return {
+          id,
+          status: node.status,
+          ready: isEnabled(state, { type: "dispatch", node: id }),
+          blockedReason: node.blockedReason,
+          staleReason: node.staleReason,
+        };
+      });
     if (nodes.length > 0) waves.push({ index, nodes });
   }
   return { waves };
