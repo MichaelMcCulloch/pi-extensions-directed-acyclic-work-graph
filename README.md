@@ -231,6 +231,23 @@ drive the same verified relation. In particular
 applying a child report, so a late completion is routed to the stale branch —
 what `StaleOnlyAfterInvalidation` and `CompletedGenMatches` prove.
 
+## Terminal UI
+
+Two surfaces, no other extension required:
+
+- a persistent widget above the editor shows the board — counts, the ready set,
+  and one line per node. It repaints on every store commit, so the graph is
+  visible while the dispatcher works.
+- `/dag` opens the same board full-screen with each node's declaration, git
+  facts, and brief.
+
+Each node is its own `pi -p` process with closed stdio, so it reports progress
+through a sidecar beside its result file (`.result.json.progress.json`). The
+widget reads it to show live per-node feedback: a spinner while the node runs,
+plus its cumulative token count, tool-call count, and last tool. Telemetry is
+observation only — it is never part of `DagState`, so it cannot affect a
+verified transition.
+
 ## Layout
 
 ```
