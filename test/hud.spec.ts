@@ -92,10 +92,10 @@ describe("DagWidget", () => {
   it("caps long boards and says how many were omitted", () => {
     const widget = new DagWidget(() => ["one", "two", "three", "four"], 2);
     const lines = widget.render(30);
-    // two kept + omission hint + separator
+    // separator + two kept + omission hint
     expect(lines).toHaveLength(4);
-    expect(lines[2]).toContain("+2 more");
-    expect(visibleWidth(lines[3]!)).toBe(30);
+    expect(visibleWidth(lines[0]!)).toBe(30);
+    expect(lines[3]).toContain("+2 more");
   });
 
   it("renders nothing when the board is empty", () => {
