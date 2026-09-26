@@ -50,11 +50,13 @@ describe("dag tool", () => {
     expect(text(inspect)).toContain("\"n1\"");
   });
 
-  it("returns a refusal instead of throwing", async () => {
+  it("surfaces a refusal as a thrown tool error so the agent sees the fault", async () => {
     const store = new DagStore({ append() {} });
-    const result = await tool(store).execute!("c", { action: "inspect", node: "missing" }, undefined, undefined, ctx);
-    expect(result.details.error).toBe("dag-unknown-node");
-    expect(text(result)).toContain("refused");
+    // Returning the refusal as content would be recorded as a successful call
+    // (`isError: false`); throwing is the only way to signal failure.
+    await expect(
+      tool(store).execute!("c", { action: "inspect", node: "missing" }, undefined, undefined, ctx),
+    ).rejects.toThrow(/dag-unknown-node/);
   });
 
   it("dry-runs a declaration and reports the diff without applying", async () => {

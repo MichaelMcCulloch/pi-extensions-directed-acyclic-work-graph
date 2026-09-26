@@ -77,7 +77,6 @@ const DagParams = Type.Object({
 interface DagDetails {
   readonly action: string;
   readonly revision: number;
-  readonly error?: string;
   readonly diff?: unknown;
   readonly warnings?: readonly string[];
   readonly board?: unknown;
@@ -209,10 +208,11 @@ export function buildDagTool(
         };
       } catch (error) {
         if (error instanceof DagOperationError) {
-          return {
-            content: [{ type: "text", text: `dag ${params.action} refused: ${error.message}` }],
-            details: { action: params.action, revision: store.state.revision, error: error.code },
-          };
+          // The agent runtime only marks a tool result as an error when
+          // `execute` throws; a refusal returned as ordinary content is
+          // reported to the model as success. Rethrow with the action and the
+          // stable code so the failure is visible and actionable.
+          throw new DagOperationError(error.code, `dag ${params.action} refused (${error.code}): ${error.message}`);
         }
         throw error;
       }
