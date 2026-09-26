@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { DagStore } from "../src/extension/store.ts";
-import { DagWidget, formatTokens, nodeLine, renderDagBoard, renderDagDetail, spinnerFrame } from "../src/extension/hud.ts";
+import { DagWidget, formatTokens, nodeLine, renderDagBoard, renderDagDetail, renderDagTree, spinnerFrame } from "../src/extension/hud.ts";
 import type { NodeProgress } from "../src/extension/telemetry.ts";
 import { modelDeclarations } from "./helpers.ts";
 
@@ -40,6 +40,16 @@ describe("dag hud renderers", () => {
     const empty = new DagStore({ append: () => {} });
     expect(renderDagBoard(empty)[0]).toContain("no nodes declared");
     expect(renderDagDetail(empty, 60)).toContain("no nodes declared");
+  });
+
+  it("renders goals on top with prerequisites nested, and no revision", () => {
+    const lines = renderDagTree(declared());
+    expect(lines[0]).toContain("0/3 done");
+    expect(lines[0]).not.toContain("rev");
+    expect(lines[1]).toContain("n3");
+    expect(lines[2]).toMatch(/└─ ○ n2/);
+    expect(lines[3]).toMatch(/\s+└─ ○ n1/);
+    expect(lines[3]).toContain("ready");
   });
 });
 
@@ -88,5 +98,16 @@ describe("DagWidget", () => {
 
   it("renders nothing when the board is empty", () => {
     expect(new DagWidget(() => []).render(30)).toEqual([]);
+  });
+
+  it("activates on a left click", () => {
+    let clicks = 0;
+    const widget = new DagWidget(() => ["one"], 12, () => {
+      clicks += 1;
+    });
+    const event = { type: "click", button: "left", x: 1, y: 1, screenX: 1, screenY: 1, width: 40, height: 1, shift: false, alt: false, ctrl: false } as const;
+    expect(widget.handleMouse(event)).toEqual({ handled: true });
+    expect(clicks).toBe(1);
+    expect(widget.handleMouse({ ...event, type: "move" })).toBeUndefined();
   });
 });

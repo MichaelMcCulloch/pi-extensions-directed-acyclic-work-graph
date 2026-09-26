@@ -14,7 +14,7 @@
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi, type Component, type TUI } from "@earendil-works/pi-tui";
+import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi, type Component, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import type { SystemStatus } from "../formal/system-model.ts";
 import type { DagState } from "../engine/state.ts";
 import type { DagStore } from "./store.ts";
@@ -87,6 +87,49 @@ export function renderDagBoard(
   return lines;
 }
 
+/** The dependency tree: goals on top, each goal's prerequisites nested below. */
+export function renderDagTree(
+  store: DagStore,
+  telemetry: ReadonlyMap<string, NodeProgress> = new Map(),
+  now: number = Date.now(),
+): string[] {
+  const board = store.board;
+  if (board.nodes.length === 0) return ["DAG · no nodes declared — use the dag tool to declare one"];
+  const state = store.state;
+  const ready = new Set(board.ready);
+  const deps = new Map(board.nodes.map((node) => [node.id, node.deps] as const));
+
+  // Goals are nodes nothing depends on; every other node hangs beneath one.
+  const isDependency = new Set<string>();
+  for (const node of board.nodes) for (const dep of node.deps) isDependency.add(dep);
+  const goals = board.nodes.map((node) => node.id).filter((id) => !isDependency.has(id));
+  const roots = goals.length > 0 ? goals : board.nodes.map((node) => node.id);
+
+  const lines = [`DAG · ${board.counts.completed}/${board.nodes.length} done · ${board.ready.length} ready`];
+  const shown = new Set<string>();
+  const label = (id: string): string => {
+    const status = state.nodes[id]?.status ?? "pending";
+    const mark = ACTIVE_STATUSES.has(status) ? spinnerFrame(now) : (STATUS_MARK[status] ?? "?");
+    const flag = ready.has(id) ? " · ready" : "";
+    return `${mark} ${id}${flag}${telemetrySuffix(telemetry.get(id))}`;
+  };
+  const walk = (id: string, prefix: string, isLast: boolean, isRoot: boolean): void => {
+    const connector = isRoot ? "" : `${prefix}${isLast ? "└─ " : "├─ "}`;
+    const seen = shown.has(id);
+    lines.push(`${connector}${label(id)}${seen ? "  ↳" : ""}`);
+    if (seen) return;
+    shown.add(id);
+    const children = deps.get(id) ?? [];
+    children.forEach((child, index) => {
+      const childIsLast = index === children.length - 1;
+      const childPrefix = isRoot ? "" : `${prefix}${isLast ? "   " : "│  "}`;
+      walk(child, childPrefix, childIsLast, false);
+    });
+  };
+  roots.forEach((id) => walk(id, "", true, true));
+  return lines;
+}
+
 /** The full board: each node followed by its declaration, git facts, and telemetry. */
 export function renderDagDetail(
   store: DagStore,
@@ -137,17 +180,26 @@ export class DagWidget implements Component {
   public constructor(
     private readonly lines: () => string[],
     private readonly maxLines = 12,
+    private readonly onActivate?: () => void,
   ) {}
 
   public invalidate(): void {
     // Rendering reads the live board each frame.
   }
 
+  public handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.type === "click" && event.button === "left" && this.onActivate !== undefined) {
+      this.onActivate();
+      return { handled: true };
+    }
+    return undefined;
+  }
+
   public render(width: number): string[] {
     const body = this.lines();
     if (body.length === 0) return [];
     const shown = body.slice(0, this.maxLines);
-    if (body.length > this.maxLines) shown.push(`… +${body.length - this.maxLines} more — /dag`);
+    if (body.length > this.maxLines) shown.push(`… +${body.length - this.maxLines} more — click to open`);
     return shown.map((line) => truncateToWidth(line, width, "…", true));
   }
 }

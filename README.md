@@ -235,9 +235,10 @@ what `StaleOnlyAfterInvalidation` and `CompletedGenMatches` prove.
 
 Two surfaces, no other extension required:
 
-- a persistent widget above the editor shows the board — counts, the ready set,
-  and one line per node. It repaints on every store commit, so the graph is
-  visible while the dispatcher works.
+- a persistent widget above the editor shows the dependency tree, with the
+  goal nodes on top and their prerequisites nested below, plus the ready count.
+  It repaints on every store commit, so the graph is visible while the
+  dispatcher works. Click it to open the explorer.
 - `/dag` opens the same board full-screen with each node's declaration, git
   facts, and brief.
 

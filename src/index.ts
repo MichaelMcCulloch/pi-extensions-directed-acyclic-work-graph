@@ -25,7 +25,7 @@ import { DagDispatcher, PiSpawner } from "./extension/dispatcher.ts";
 import { buildReportTool, isNodeProcess } from "./extension/dag-report.ts";
 import { DagStore, type DagPersistence } from "./extension/store.ts";
 import { buildDagTool } from "./extension/tool.ts";
-import { DagExplorer, DagWidget, renderDagBoard, renderDagDetail } from "./extension/hud.ts";
+import { DagExplorer, DagWidget, renderDagBoard, renderDagDetail, renderDagTree } from "./extension/hud.ts";
 import { installProgressReporter, readTelemetry, type NodeProgress } from "./extension/telemetry.ts";
 
 /** The custom-entry type that carries the complete composed snapshot. */
@@ -85,7 +85,11 @@ export default function dagExtension(pi: ExtensionAPI): void {
     if (!widgetInstalled) {
       ctx.ui.setWidget(WIDGET_KEY, (tui) => {
         widgetTui = tui;
-        return new DagWidget(() => renderDagBoard(getStore(ctx), telemetry));
+        return new DagWidget(
+          () => renderDagTree(getStore(ctx), telemetry),
+          12,
+          () => void openExplorer(currentCtx ?? ctx),
+        );
       });
       widgetInstalled = true;
     }
@@ -147,6 +151,20 @@ export default function dagExtension(pi: ExtensionAPI): void {
 
   pi.registerTool(buildDagTool(getStore, getDispatcher));
 
+  const openExplorer = async (ctx: ExtensionContext): Promise<void> => {
+    if (ctx.mode !== "tui" || !ctx.hasUI) return;
+    await ctx.ui.custom<undefined>(
+      (tui, theme, _keybindings, done) =>
+        new DagExplorer(
+          (width) => renderDagDetail(getStore(ctx), width, telemetry),
+          tui,
+          () => ctx.ui.theme,
+          () => done(undefined),
+        ),
+      { overlay: true, overlayOptions: { width: "92%", maxHeight: "92%", anchor: "center", margin: 1 } },
+    );
+  };
+
   pi.registerCommand("dag", {
     description: "Show the durable DAG board; open the scrollable explorer",
     handler: async (_args, ctx) => {
@@ -154,16 +172,7 @@ export default function dagExtension(pi: ExtensionAPI): void {
         ctx.ui.notify(renderDagBoard(getStore(ctx), telemetry).join("\n"), "info");
         return;
       }
-      await ctx.ui.custom<undefined>(
-        (tui, theme, _keybindings, done) =>
-          new DagExplorer(
-            (width) => renderDagDetail(getStore(ctx), width, telemetry),
-            tui,
-            () => ctx.ui.theme,
-            () => done(undefined),
-          ),
-        { overlay: true, overlayOptions: { width: "92%", maxHeight: "92%", anchor: "center", margin: 1 } },
-      );
+      await openExplorer(ctx);
     },
   });
 }
