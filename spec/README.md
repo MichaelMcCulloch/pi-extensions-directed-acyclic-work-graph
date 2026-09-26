@@ -37,20 +37,23 @@ worktree/integration rules (`GitInv`), the seams between them (`CouplingInv`:
 `RegisteredBeforeRunning`, `CompletedHasCommit`, `IntegratedImpliesCompleted`,
 `WorktreeDeclared`), `FileOwnership` (declared file sets are pairwise disjoint,
 enforced by the `Declare` guard), and five induction strengthenings
-(`UndeclaredFree`, `DepsIntegratedBeyondPending`, `SuspendedHasWorktree`,
+(`UndeclaredFree` (an orphaned node is declared, and neither an undeclared nor
+an orphaned node holds files), `DepsIntegratedBeyondPending`,
+`SuspendedHasWorktree`,
 `DispatchedDeclared`, `MergingExcludesIntegrated`) discovered by the TLAPS proof.
-Liveness under fairness: `CompletedStable`, `EffectsTerminate`,
+Liveness under fairness: `CompletedStable` (integration is stable),
+`EffectsTerminate`,
 `IntegrationSettles`.
 
-TLC explores the complete reachable state space of the fixture — 3,946 distinct
-states, 15,664 generated. `test/system-model.spec.ts` re-explores the same
+TLC explores the complete reachable state space of the fixture — 12,495 distinct
+states, 113,802 generated. `test/system-model.spec.ts` re-explores the same
 relation in TypeScript and asserts the reachable set size equals the count TLC
 reports, so the specification and the executable mirror cannot drift apart
 silently.
 
 The invariant is also **inductive for arbitrary constants**: `DagSystem` is
 parameterized by `Nodes`, `Edges`, `Files`, `MaxGen`, and `MaxDropped`, and
-`DagSystemProof.tla` proves `Init => Inv` and that each of the 22 actions
+`DagSystemProof.tla` proves `Init => Inv` and that each of the 29 actions
 preserves each of the 10 components, with `PTL` deriving `Spec => []Inv`. Run it
 with `node scripts/tlapm.mjs`.
 
@@ -58,7 +61,8 @@ with `node scripts/tlapm.mjs`.
 
 `scripts/emit-traces.ts` records composed states across the chain,
 crash/redelivery, blocked and underspecified resumes, conflict resolution,
-steer/stale, and reopen/reconcile, and writes `generated/TracesData.tla`.
+steer/stale, reopen/reconcile, manual park/unpark, stale/reset, and
+orphan/adopt, and writes `generated/TracesData.tla`.
 `TraceValidation.tla` walks every trace; `ActionOf`/`GuardOf` reference the named
 guards of `DagSystem`, so the validator has no private copy to drift, and the
 `TraceInv` invariant rejects any step that is not enabled or whose successor

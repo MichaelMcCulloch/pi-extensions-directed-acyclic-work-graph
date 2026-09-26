@@ -2,23 +2,28 @@
  * The single durable DAG store.
  *
  * It owns one state — the composed scheduler + worktree machine — and every
- * mutation is a command whose transition is `referenceReduceSystemState`, the
- * mirror of `spec/DagSystem.tla`. There is no second store and no bridge: the
- * domain interaction is internal to the verified relation.
+ * runtime mutation is a command whose transition is `referenceReduceSystemState`,
+ * the mirror of `spec/DagSystem.tla`. Declaration is a synchronous, idempotent
+ * merge-by-id layer that stages a new state and then feeds the resulting
+ * `declare`/`adopt`/`orphan`/`amend`/`mark-stale` events through the same
+ * relation, so the durable state is always a model state.
  *
  * Git side effects are performed by the dispatcher with `src/engine/git.ts`;
  * the store records the resulting facts and applies the corresponding model
- * event, so the durable state is always a model state.
+ * event.
  */
 
-import { projectBoard, type DagBoard } from "../engine/projection.ts";
+import { projectBoard, projectPlan, type DagBoard, type DagPlan } from "../engine/projection.ts";
 import { isEnabled, reduceCommand, type DagCommand, type DagEffect, type ReduceResult } from "../engine/reducer.ts";
 import {
-  applyDeclaration,
   initDagState,
   normalizeDagState,
   validateDeclaration,
+  type DagNode,
   type DagState,
+  type DeclarationDiff,
+  type DeclarationEvent,
+  type DeclarationOptions,
   type NodeDeclaration,
   type NodeId,
 } from "../engine/state.ts";
@@ -38,6 +43,13 @@ export interface OperationResult {
   readonly state: DagState;
   readonly effects: readonly DagEffect[];
   readonly board: DagBoard;
+}
+
+/** A declaration result, including the diff and warnings. */
+export interface DeclarationResult extends OperationResult {
+  readonly diff: DeclarationDiff;
+  readonly warnings: readonly string[];
+  readonly applied: boolean;
 }
 
 /** A settlement result naming the transition selected. */
@@ -63,6 +75,44 @@ export interface DispatchFacts {
   readonly branch: string;
 }
 
+/** Options accepted by `write`/`add`. */
+export interface DeclareOptions extends DeclarationOptions {
+  readonly dryRun?: boolean;
+  readonly expectRevision?: number;
+}
+
+/** A single-node definition patch for `edit`. */
+export interface NodeEdit {
+  readonly content?: string;
+  readonly brief?: string;
+  readonly deps?: readonly string[];
+  readonly kind?: "task" | "integration";
+  readonly files?: readonly string[];
+  readonly policy?: "delegate" | "ours" | "theirs" | "halt";
+  readonly noop?: boolean;
+}
+
+function eventToCommand(event: DeclarationEvent): DagCommand {
+  switch (event.kind) {
+    case "declare":
+      return { type: "declare", node: event.node, files: event.files };
+    case "adopt":
+      return { type: "adopt", node: event.node, files: event.files };
+    case "amend":
+      return { type: "amend", node: event.node, files: event.files };
+    case "mark-stale":
+      return { type: "mark-stale", node: event.node };
+    case "orphan":
+      return { type: "orphan", node: event.node };
+  }
+}
+
+function patchNode(state: DagState, node: NodeId, patch: Partial<DagNode>): DagState {
+  const existing = state.nodes[node];
+  if (existing === undefined) return state;
+  return { ...state, nodes: { ...state.nodes, [node]: { ...existing, ...patch } } };
+}
+
 /** The durable store. */
 export class DagStore {
   #state: DagState;
@@ -83,17 +133,144 @@ export class DagStore {
     return projectBoard(this.#state);
   }
 
+  public get plan(): DagPlan {
+    return projectPlan(this.#state);
+  }
+
   public violations(): readonly { invariant: string; detail: string }[] {
     return invariantViolations(this.#state);
   }
 
-  /** Declare or amend the graph, preserving surviving machine and git fields. */
-  public declare(declaration: readonly NodeDeclaration[]): OperationResult {
-    const errors = validateDeclaration(this.#state, declaration);
-    if (errors.length > 0) throw new DagOperationError("dag-invalid-declaration", errors.join("; "));
-    this.#state = applyDeclaration(this.#state, declaration);
-    this.#commit();
-    return { state: this.#state, effects: [], board: this.board };
+  /**
+   * Declare or amend the graph. `write` (default) declares the whole node set
+   * and orphans nodes absent from it; `add` upserts only the given nodes.
+   * Unchanged nodes are untouched. A definition change to a node that has left
+   * pending marks it `stale`; an integrated node's definition cannot change.
+   */
+  public declare(declaration: readonly NodeDeclaration[], options: DeclareOptions = {}): DeclarationResult {
+    if (options.expectRevision !== undefined && options.expectRevision !== this.#state.revision) {
+      throw new DagOperationError(
+        "dag-stale-revision",
+        `expected revision ${options.expectRevision}, current revision is ${this.#state.revision}`,
+      );
+    }
+    const validation = validateDeclaration(this.#state, declaration, options);
+    if (validation.errors.length > 0) {
+      throw new DagOperationError("dag-invalid-declaration", validation.errors.join("; "));
+    }
+    if (options.dryRun === true) {
+      return {
+        state: this.#state,
+        effects: [],
+        board: this.board,
+        diff: validation.diff,
+        warnings: validation.warnings,
+        applied: false,
+      };
+    }
+    this.#applyStaged(validation.state, validation.events);
+    return {
+      state: this.#state,
+      effects: [],
+      board: this.board,
+      diff: validation.diff,
+      warnings: validation.warnings,
+      applied: true,
+    };
+  }
+
+  /** Upsert a subset of nodes without disturbing absent ones. */
+  public add(declaration: readonly NodeDeclaration[], options: DeclareOptions = {}): DeclarationResult {
+    return this.declare(declaration, { ...options, mode: "add" });
+  }
+
+  /** Change one node's definition, marking it stale if it has left pending. */
+  public edit(node: NodeId, patch: NodeEdit, options: DeclareOptions = {}): DeclarationResult {
+    const existing = this.#state.nodes[node];
+    if (existing === undefined) throw new DagOperationError("dag-unknown-node", `unknown node ${node}`);
+    const declaration: NodeDeclaration = {
+      id: node,
+      content: patch.content ?? existing.content,
+      brief: patch.brief ?? existing.brief,
+      deps: patch.deps ?? existing.deps,
+      kind: patch.kind ?? existing.kind,
+      files: patch.files ?? existing.files,
+      policy: patch.policy ?? existing.policy,
+      noop: patch.noop ?? existing.noop,
+    };
+    return this.declare([declaration], { ...options, mode: "add" });
+  }
+
+  /** Add dependency edges to a pending node. */
+  public link(node: NodeId, deps: readonly NodeId[]): DeclarationResult {
+    const existing = this.#state.nodes[node];
+    if (existing === undefined) throw new DagOperationError("dag-unknown-node", `unknown node ${node}`);
+    const merged = [...existing.deps];
+    for (const dep of deps) if (!merged.includes(dep)) merged.push(dep);
+    return this.edit(node, { deps: merged });
+  }
+
+  /** Remove dependency edges from a pending node. */
+  public unlink(node: NodeId, deps: readonly NodeId[]): DeclarationResult {
+    const existing = this.#state.nodes[node];
+    if (existing === undefined) throw new DagOperationError("dag-unknown-node", `unknown node ${node}`);
+    const remove = new Set(deps);
+    return this.edit(node, { deps: existing.deps.filter((dep) => !remove.has(dep)) });
+  }
+
+  /** Physically delete a node that nothing remaining depends on. */
+  public prune(node: NodeId): DeclarationResult {
+    const state = this.#state;
+    // Only active nodes are re-declared; already-orphaned nodes are left alone
+    // rather than resurrected by the write.
+    const declaration = state.order
+      .filter((id) => id !== node && state.nodes[id]!.orphaned !== true)
+      .map((id) => {
+        const n = state.nodes[id]!;
+        return {
+          id,
+          content: n.content,
+          brief: n.brief,
+          deps: n.deps,
+          kind: n.kind,
+          files: n.files,
+          policy: n.policy,
+          noop: n.noop,
+        };
+      });
+    return this.declare(declaration, { mode: "write", prune: true });
+  }
+
+  /** Manually park a pending node on an external condition. */
+  public park(node: NodeId, reason: string): OperationResult {
+    const current = this.#state.nodes[node];
+    if (current === undefined) throw new DagOperationError("dag-unknown-node", `unknown node ${node}`);
+    if (!isEnabled(this.#state, { type: "park", node })) {
+      throw new DagOperationError("dag-transition-refused", `cannot block ${node} in status ${current.status}`);
+    }
+    this.#state = patchNode(this.#state, node, { blockedReason: reason });
+    return this.#apply({ type: "park", node });
+  }
+
+  /** Lift a manual block. */
+  public unpark(node: NodeId): OperationResult {
+    const current = this.#state.nodes[node];
+    if (current === undefined) throw new DagOperationError("dag-unknown-node", `unknown node ${node}`);
+    if (!isEnabled(this.#state, { type: "unpark", node })) {
+      throw new DagOperationError("dag-transition-refused", `cannot unblock ${node} in status ${current.status}`);
+    }
+    this.#state = patchNode(this.#state, node, { blockedReason: null });
+    return this.#apply({ type: "unpark", node });
+  }
+
+  /** Reset a stale node so its new definition can run. */
+  public reset(node: NodeId): OperationResult {
+    const current = this.#state.nodes[node];
+    if (current === undefined) throw new DagOperationError("dag-unknown-node", `unknown node ${node}`);
+    if (!isEnabled(this.#state, { type: "reset", node })) {
+      throw new DagOperationError("dag-transition-refused", `cannot reset ${node} in status ${current.status}`);
+    }
+    return this.#apply({ type: "reset", node });
   }
 
   /** True when the composed model accepts a dispatch for this node. */
@@ -194,6 +371,24 @@ export class DagStore {
       }
     }
     return { state: this.#state, effects: [], board: this.board };
+  }
+
+  /** Apply a staged declaration: patch is already in `staged`, then events. */
+  #applyStaged(staged: DagState, events: readonly DeclarationEvent[]): void {
+    let next = staged;
+    for (const event of events) {
+      const command = eventToCommand(event);
+      try {
+        next = reduceCommand(next, command).state;
+      } catch (error) {
+        if (error instanceof DagSystemError) {
+          throw new DagOperationError("dag-transition-refused", error.message);
+        }
+        throw error;
+      }
+    }
+    this.#state = next;
+    this.#commit();
   }
 
   #apply(command: DagCommand): OperationResult {

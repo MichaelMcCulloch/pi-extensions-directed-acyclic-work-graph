@@ -12,18 +12,26 @@ VARIABLES traceNo, traceIndex, error
 Trace == Traces[traceNo]
 
 state ==
-    [ declared |-> declared, files |-> files, status |-> status, gen |-> gen,
+    [ declared |-> declared, files |-> files, orphaned |-> orphaned,
+      status |-> status, gen |-> gen,
       cmd |-> cmd, effect |-> effect, effectFence |-> effectFence,
       completedGen |-> completedGen, dropped |-> dropped, gstate |-> gstate,
       committed |-> committed, integrated |-> integrated,
       registered |-> registered, merging |-> merging, checked |-> checked ]
 
-machineVars == <<declared, files, status, gen, cmd, effect, effectFence,
-                completedGen, dropped, gstate, committed, integrated,
-                registered, merging, checked>>
+machineVars == <<declared, files, orphaned, status, gen, cmd, effect,
+                effectFence, completedGen, dropped, gstate, committed,
+                integrated, registered, merging, checked>>
 
 ActionOf(ev) ==
     \/ (ev.type = "declare"          /\ DeclareWith(ev.node, ev.files))
+    \/ (ev.type = "adopt"            /\ AdoptWith(ev.node, ev.files))
+    \/ (ev.type = "orphan"           /\ Orphan(ev.node))
+    \/ (ev.type = "amend"            /\ AmendWith(ev.node, ev.files))
+    \/ (ev.type = "mark-stale"       /\ MarkStale(ev.node))
+    \/ (ev.type = "reset"            /\ Reset(ev.node))
+    \/ (ev.type = "park"             /\ Park(ev.node))
+    \/ (ev.type = "unpark"           /\ Unpark(ev.node))
     \/ (ev.type = "dispatch"         /\ Dispatch(ev.node))
     \/ (ev.type = "finish-worktree"  /\ FinishWorktree(ev.node))
     \/ (ev.type = "admit"            /\ Admit(ev.node))
@@ -47,6 +55,13 @@ ActionOf(ev) ==
 
 GuardOf(ev) ==
     \/ (ev.type = "declare"          /\ GuardDeclare(ev.node, ev.files))
+    \/ (ev.type = "adopt"            /\ GuardAdopt(ev.node, ev.files))
+    \/ (ev.type = "orphan"           /\ GuardOrphan(ev.node))
+    \/ (ev.type = "amend"            /\ GuardAmend(ev.node))
+    \/ (ev.type = "mark-stale"       /\ GuardMarkStale(ev.node))
+    \/ (ev.type = "reset"            /\ GuardReset(ev.node))
+    \/ (ev.type = "park"             /\ GuardPark(ev.node))
+    \/ (ev.type = "unpark"           /\ GuardUnpark(ev.node))
     \/ (ev.type = "dispatch"         /\ CanDispatch(ev.node))
     \/ (ev.type = "finish-worktree"  /\ GuardFinish(ev.node))
     \/ (ev.type = "admit"            /\ GuardAdmit(ev.node))
@@ -68,6 +83,7 @@ GuardOf(ev) ==
 AssignState(s) ==
     /\ declared = s.declared
     /\ files = s.files
+    /\ orphaned = s.orphaned
     /\ status = s.status
     /\ gen = s.gen
     /\ cmd = s.cmd

@@ -100,6 +100,30 @@ const reconcile = (node: string): Step => (store) => {
   store.apply({ type: "reconcile", node });
   return { type: "reconcile", node };
 };
+const park = (node: string): Step => (store) => {
+  store.apply({ type: "park", node });
+  return { type: "park", node };
+};
+const unpark = (node: string): Step => (store) => {
+  store.apply({ type: "unpark", node });
+  return { type: "unpark", node };
+};
+const markStale = (node: string): Step => (store) => {
+  store.apply({ type: "mark-stale", node });
+  return { type: "mark-stale", node };
+};
+const reset = (node: string): Step => (store) => {
+  store.apply({ type: "reset", node });
+  return { type: "reset", node };
+};
+const orphan = (node: string): Step => (store) => {
+  store.apply({ type: "orphan", node });
+  return { type: "orphan", node };
+};
+const adopt = (node: string): Step => (store) => {
+  store.apply({ type: "adopt", node, files: [] });
+  return { type: "adopt", node, files: [] };
+};
 const conflict = (node: string): Step => (store) => {
   store.recordConflict(node);
   return { type: "merge-conflict", node };
@@ -161,6 +185,9 @@ export function scenarios(): Scenario[] {
       steps: [...boot("n1"), reopen, reconcile("n1"), admit("n1"), checkFiles("n1"), complete("n1"), ...integration("n1")],
     },
     { name: "stop-stale", declaration: DECLARATION, steps: [...boot("n1"), stop("n1"), effectStale("n1")] },
+    { name: "park-unpark", declaration: DECLARATION, steps: [park("n1"), unpark("n1"), ...lifecycle("n1"), ...integration("n1")] },
+    { name: "stale-reset", declaration: DECLARATION, steps: [...lifecycle("n1"), markStale("n1"), reset("n1"), ...lifecycle("n1"), ...integration("n1")] },
+    { name: "orphan-adopt", declaration: DECLARATION, steps: [orphan("n1"), adopt("n1"), ...lifecycle("n1"), ...integration("n1")] },
   ];
 }
 
@@ -203,6 +230,7 @@ function tlaState(state: AbstractSystemState): string {
     "[",
     `declared |-> ${record((n) => bool(state.declared[n] === true))}`,
     `, files |-> ${record((n) => setLiteral(state.files[n] ?? []))}`,
+    `, orphaned |-> ${record((n) => bool(state.orphaned[n] === true))}`,
     `, status |-> ${record((n) => quote(state.status[n]!))}`,
     `, gen |-> ${record((n) => String(state.gen[n]))}`,
     `, cmd |-> ${record((n) => quote(state.cmd[n]!))}`,
@@ -224,7 +252,8 @@ function tlaEvent(event: SystemEvent | null): string {
   const fields: string[] = [`type |-> ${quote(event?.type ?? "init")}`];
   const nodeValue = event !== null && "node" in event ? event.node : "n1";
   fields.push(`node |-> ${quote(nodeValue)}`);
-  const files = event !== null && event.type === "declare" ? event.files : [];
+  const files =
+    event !== null && (event.type === "declare" || event.type === "adopt" || event.type === "amend") ? event.files : [];
   fields.push(`files |-> ${setLiteral(files)}`);
   return `[ ${fields.join(", ")} ]`;
 }

@@ -11,7 +11,7 @@ when a stop, a steer, a child report, and a crash race the same node. This
 project treats that coupling as the object of verification.
 
 > **Worktrees, waves, and spawning are implemented and verified.** The single
-verification subject is `spec/DagSystem.tla` (TLC fixture, 3,946 states;
+verification subject is `spec/DagSystem.tla` (TLC fixture, 12,495 states;
 `spec/DagSystemProof.tla` proves `Spec => []Inv` for arbitrary constants),
 mirrored by
 `src/formal/system-model.ts`; the decision record is
@@ -47,7 +47,7 @@ file ownership:
 
 | State | Owns |
 |---|---|
-| `declared`, `files` | which nodes the declaration contains and which files each claims |
+| `declared`, `files`, `orphaned` | which nodes the declaration contains, which files each claims, and which are retained but removed from the active graph |
 | `status`, `gen`, `completedGen` | node lifecycle and its monotonic fence |
 | `cmd` | the durable accepted command per node |
 | `effect`, `effectFence`, `dropped` | the process-local effect per node and stale returns |
@@ -61,11 +61,14 @@ single subject there is no refinement obligation between models.
 ```
                 dispatch/resume/steer/reconcile      admit
    pending ────────────────────────────────▶ starting ─────────▶ in_progress
-                                               │   │                 │
-                              resume/steer ────┘   │ stop            ├─ complete ─▶ completed
-                                                  ▼                 ├─ block    ─▶ blocked
-                                             interrupted            ├─ underspecify ─▶ underspecified
+      │  ▲                                     │   │                 │
+ park │  │ unpark          resume/steer ───────┘   │ stop            ├─ complete ─▶ completed
+      ▼  │                                       ▼                 ├─ block    ─▶ blocked
+   parked                                    interrupted            ├─ underspecify ─▶ underspecified
                                                                     └─ fail     ─▶ failed
+
+   amendment: non-pending definition change ─▶ stale ─reset─▶ pending
+   orphaned:  declaration removed the node (retained, not dispatchable) ─adopt─▶ pending
 
    command:  none ──dispatch/resume/steer/reconcile──▶ accepted ──admit/stop──▶ none
    effect:   idle ──admit──▶ running ──settle/underspecify/stale/reopen──▶ idle
@@ -107,7 +110,7 @@ pnpm verify           # typecheck + tests + TLC + traces + proof
 ### What TLC proves
 
 TLC explores the **complete reachable state space of the composed machine —
-3,946 distinct states, 15,664 generated** — and checks the product of the
+12,495 distinct states, 113,802 generated** — and checks the product of the
 scheduler and the worktree/integration machines, including the seams:
 
 **Safety (`Inv`)**
@@ -120,7 +123,7 @@ scheduler and the worktree/integration machines, including the seams:
 | `WorktreeForRunning` / `RegisteredBeforeRunning` | a dispatched node has a live worktree; a running node a registered one |
 | `CompletedHasCommit` / `IntegratedImpliesCompleted` | completion implies a commit; integration implies completion |
 | `FileOwnership` | declared file sets are pairwise disjoint in every reachable state |
-| `UndeclaredFree`, `DepsIntegratedBeyondPending`, `SuspendedHasWorktree`, `DispatchedDeclared`, `MergingExcludesIntegrated` | the induction strengthenings: true of every reachable state, and what makes `Inv` inductive for arbitrary N |
+| `UndeclaredFree` (an orphaned node is declared and free of files), `DepsIntegratedBeyondPending`, `SuspendedHasWorktree`, `DispatchedDeclared`, `MergingExcludesIntegrated` | the induction strengthenings: true of every reachable state, and what makes `Inv` inductive for arbitrary N |
 
 **Liveness** (`WF` on `FinishWorktree`, `EffectReturns`, `BeginMerge`; `SF` on
 the settle step): `CompletedStable`, `EffectsTerminate`, `IntegrationSettles`.
@@ -135,8 +138,8 @@ proves, by induction,
 THEOREM Safety == ASSUME MaxGen \in Nat, MaxDropped \in Nat PROVE Spec => []Inv
 ```
 
-`Init => Inv`, and each of the 22 actions preserves each of the 10 invariant
-components (510 obligations, all discharged by tlapm). This holds for **every**
+`Init => Inv`, and each of the 29 actions preserves each of the 10 invariant
+components (664 obligations, all discharged by tlapm). This holds for **every**
 node set and dependency relation — the TLC fixture is only the executable
 check and the liveness/count cross-check. The two side conditions
 (`MaxGen ∈ Nat`, `MaxDropped ∈ Nat`) are what the fixture made implicit by
@@ -146,7 +149,7 @@ instantiating numerals. `pnpm verify:proof` runs the proof.
 
 1. **The spec is executable.** `src/formal/system-model.ts` transcribes
    `DagSystem.tla`; `test/system-model.spec.ts` explores it exhaustively and
-   asserts the reachable set is **exactly 3,946 states** — the number TLC
+   asserts the reachable set is **exactly 12,495 states** — the number TLC
    reports. Drift changes the count and fails the test.
 2. **Production is the verified relation.** One durable store
    (`src/extension/store.ts`) owns the composed state, and its reducer is
@@ -167,7 +170,7 @@ instantiating numerals. `pnpm verify:proof` runs the proof.
         │  └──TLAPS──▶ []Inv for ALL Nodes, Edges, Files, MaxGen, MaxDropped
         │ same transition relation
         ▼
-  src/formal/system-model.ts ──count cross-check──▶ 3,946 states
+  src/formal/system-model.ts ──count cross-check──▶ 12,495 states
         │ used directly by
         ▼
   DagStore (one state) ──▶ production traces ──TLC──▶ TraceValidation.tla
@@ -191,10 +194,14 @@ membership, fences, crash recovery, and the races between them.
 What is deliberately outside the verified core and handled as pure,
 non-concurrent functions with their own tests:
 
-- **Graph declaration.** `write`/`amend` validation (acyclicity, dependency
-existence, brief sections, immutability of non-pending nodes) is a synchronous
-function in [`src/engine/state.ts`](src/engine/state.ts). It cannot be entered
-while the machines are mid-transition, so it is not part of the product state.
+- **Graph declaration.** `write`/`add`/`edit`/`link`/`unlink`/`remove` are an
+idempotent, merge-by-id declaration layer. Validation (acyclicity, dependency
+existence, brief sections, `stale` vs `reset` safety, file ownership) is a
+synchronous function in [`src/engine/state.ts`](src/engine/state.ts); the model
+covers the resulting `declare`/`adopt`/`orphan`/`amend`/`mark-stale`/`park`/
+`unpark`/`reset` transitions, but the layer cannot be entered while the machines
+are mid-transition, so declaration build-up itself is not part of the product
+state.
 - **Git and child processes.** The extension *does* drive Git and spawn nested
 agents. That I/O boundary is the named residual: every Git outcome is mapped to
 a model event (`commit-merge`, `merge-conflict`, `resolve-conflict`, or a
@@ -219,14 +226,23 @@ One tool with an `action` discriminator. State is stored in the pi session as a
 
 | Action | Effect |
 |---|---|
-| `write` | declare or amend the complete node list (validated, deps acyclic) |
-| `status` | read the board, counts, and ready set |
+| `write` | declare the complete node list; merge-by-id, absent nodes are `orphaned` (or `prune`d), unchanged nodes are untouched |
+| `add` | upsert a subset of nodes without disturbing absent ones |
+| `edit` | change one node's definition; a finished node is marked `stale` (reset it to re-run) and a running node is refused |
+| `link` / `unlink` | add or remove dependency edges on a pending node |
+| `remove` | delete a node nothing remaining depends on |
+| `block` / `unblock` | park a pending node on an external condition; dependents wait rather than fail |
+| `reset` | return a `stale` node to pending so its new definition can run |
+| `status` | read the board, counts, ready set, and per-node readiness explanations |
+| `plan` | the topologically ordered future waves, including parked nodes |
 | `inspect` | read one node's durable execution facts |
-| `run` | dispatch every ready node into a git worktree, spawn a nested `pi`, validate its commit, integrate it (fast-forward, else merge commit), and settle the node |
+| `run` | dispatch every ready node (or the named ids) into git worktrees, spawn a nested `pi`, validate its commit, integrate it, and settle the node; `follow` keeps dispatching as completions unlock dependents |
 
-Transitions the tool does not expose directly (`admit`, `effect-stale`,
-`reconcile`, `crash`, `reopen`) are applied by the store and dispatcher, which
-drive the same verified relation. In particular
+`write`/`add`/`edit` accept `dry_run` (return the diff without applying) and
+`expect_revision` (refuse if another session advanced the graph). Transitions
+the tool does not expose directly (`admit`, `effect-stale`, `reconcile`,
+`crash`, `reopen`) are applied by the store and dispatcher, which drive the same
+verified relation. In particular
 [`DagStore`](src/extension/store.ts) re-checks `effectFence === gen` before
 applying a child report, so a late completion is routed to the stale branch —
 what `StaleOnlyAfterInvalidation` and `CompletedGenMatches` prove.

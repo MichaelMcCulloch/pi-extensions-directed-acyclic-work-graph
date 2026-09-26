@@ -11,6 +11,13 @@ import { SYSTEM_ACTIONS } from "../src/formal/system-model.ts";
 
 const TLA_TO_MODEL: Readonly<Record<string, string>> = {
   Declare: "declare",
+  Adopt: "adopt",
+  Orphan: "orphan",
+  Amend: "amend",
+  MarkStale: "mark-stale",
+  Reset: "reset",
+  Park: "park",
+  Unpark: "unpark",
   Dispatch: "dispatch",
   FinishWorktree: "finish-worktree",
   Admit: "admit",
@@ -35,6 +42,13 @@ const TLA_TO_MODEL: Readonly<Record<string, string>> = {
 
 const GUARD_NAME: Readonly<Record<string, string>> = {
   declare: "GuardDeclare",
+  adopt: "GuardAdopt",
+  orphan: "GuardOrphan",
+  amend: "GuardAmend",
+  "mark-stale": "GuardMarkStale",
+  reset: "GuardReset",
+  park: "GuardPark",
+  unpark: "GuardUnpark",
   dispatch: "CanDispatch",
   "finish-worktree": "GuardFinish",
   admit: "GuardAdmit",

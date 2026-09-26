@@ -109,9 +109,9 @@ async function checkModel(java, jar) {
     writeFileSync(resolve(specDir, `tlc-${model.name}.log`), output, "utf8");
     if (result.status !== 0) throw new Error(`TLC failed for ${model.name} (exit ${result.status})`);
 
-    const distinct = output.replaceAll(",", "").match(/(\d+)\s+distinct states found/);
-    if (distinct) {
-      counts[model.name] = Number(distinct[1]);
+    const distinct = [...output.replaceAll(",", "").matchAll(/(\d+)\s+distinct states found/g)];
+    if (distinct.length > 0) {
+      counts[model.name] = Number(distinct.at(-1)[1]);
       process.stdout.write(`\n${model.name}: ${counts[model.name]} distinct reachable states\n`);
     }
   }

@@ -24,6 +24,7 @@ function key(state: AbstractSystemState): string {
   return JSON.stringify([
     nodes.map((n) => state.declared[n]),
     nodes.map((n) => state.files[n]),
+    nodes.map((n) => state.orphaned[n]),
     nodes.map((n) => state.status[n]),
     nodes.map((n) => state.gen[n]),
     nodes.map((n) => state.cmd[n]),

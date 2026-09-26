@@ -8,8 +8,9 @@
 EXTENDS Naturals
 
 VARIABLES
-    declared, files, status, gen, cmd, effect, effectFence, completedGen,
-    dropped, gstate, committed, integrated, registered, merging, checked
+    declared, files, orphaned, status, gen, cmd, effect, effectFence,
+    completedGen, dropped, gstate, committed, integrated, registered,
+    merging, checked
 
 INSTANCE DagSystem WITH
     Nodes            <- {"n1", "n2"},
@@ -19,6 +20,7 @@ INSTANCE DagSystem WITH
     MaxDropped       <- 4,
     declared         <- declared,
     files            <- files,
+    orphaned         <- orphaned,
     status           <- status,
     gen              <- gen,
     cmd              <- cmd,

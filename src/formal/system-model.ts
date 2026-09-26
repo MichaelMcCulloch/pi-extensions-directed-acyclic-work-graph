@@ -23,7 +23,9 @@ export type SystemStatus =
   | "blocked"
   | "failed"
   | "interrupted"
-  | "underspecified";
+  | "underspecified"
+  | "parked"
+  | "stale";
 
 /** Statuses in which a node is suspended with its worktree still intact. */
 const SUSPENDED_STATUSES: ReadonlySet<SystemStatus> = new Set([
@@ -58,6 +60,8 @@ export const SYSTEM_MODEL: SystemModelConfig = {
 export interface AbstractSystemState {
   readonly declared: Readonly<Record<NodeId, boolean>>;
   readonly files: Readonly<Record<NodeId, readonly string[]>>;
+  /** Removed from the active declaration but retained with its lifecycle state. */
+  readonly orphaned: Readonly<Record<NodeId, boolean>>;
   readonly status: Readonly<Record<NodeId, SystemStatus>>;
   readonly gen: Readonly<Record<NodeId, number>>;
   readonly cmd: Readonly<Record<NodeId, "none" | "accepted">>;
@@ -77,6 +81,13 @@ export interface AbstractSystemState {
 /** The event alphabet. */
 export type SystemEvent =
   | { readonly type: "declare"; readonly node: NodeId; readonly files: readonly string[] }
+  | { readonly type: "adopt"; readonly node: NodeId; readonly files: readonly string[] }
+  | { readonly type: "orphan"; readonly node: NodeId }
+  | { readonly type: "amend"; readonly node: NodeId; readonly files: readonly string[] }
+  | { readonly type: "mark-stale"; readonly node: NodeId }
+  | { readonly type: "reset"; readonly node: NodeId }
+  | { readonly type: "park"; readonly node: NodeId }
+  | { readonly type: "unpark"; readonly node: NodeId }
   | { readonly type: "dispatch"; readonly node: NodeId }
   | { readonly type: "finish-worktree"; readonly node: NodeId }
   | { readonly type: "admit"; readonly node: NodeId }
@@ -103,6 +114,13 @@ export type SystemAction = SystemEvent["type"];
 /** Every action of the composed machine, in specification order. */
 export const SYSTEM_ACTIONS: readonly SystemAction[] = [
   "declare",
+  "adopt",
+  "orphan",
+  "amend",
+  "mark-stale",
+  "reset",
+  "park",
+  "unpark",
   "dispatch",
   "finish-worktree",
   "admit",
@@ -129,6 +147,7 @@ export const SYSTEM_ACTIONS: readonly SystemAction[] = [
 export function initAbstractSystemState(config: SystemModelConfig = SYSTEM_MODEL): AbstractSystemState {
   const declared: Record<NodeId, boolean> = {};
   const files: Record<NodeId, string[]> = {};
+  const orphaned: Record<NodeId, boolean> = {};
   const status: Record<NodeId, SystemStatus> = {};
   const gen: Record<NodeId, number> = {};
   const cmd: Record<NodeId, "none" | "accepted"> = {};
@@ -144,6 +163,7 @@ export function initAbstractSystemState(config: SystemModelConfig = SYSTEM_MODEL
   for (const node of config.nodes) {
     declared[node] = false;
     files[node] = [];
+    orphaned[node] = false;
     status[node] = "pending";
     gen[node] = 0;
     cmd[node] = "none";
@@ -160,6 +180,7 @@ export function initAbstractSystemState(config: SystemModelConfig = SYSTEM_MODEL
   return {
     declared,
     files,
+    orphaned,
     status,
     gen,
     cmd,
@@ -214,8 +235,62 @@ export const systemGuards = {
     files.every((file) => config.fileUniverse.includes(file)) &&
     config.nodes.every((other) => state.declared[other] !== true || disjoint(state.files[other] ?? [], files)),
 
+  adopt: (config: SystemModelConfig, state: AbstractSystemState, node: NodeId, files: readonly string[]): boolean =>
+    state.declared[node] === true &&
+    state.orphaned[node] === true &&
+    files.every((file) => config.fileUniverse.includes(file)) &&
+    config.nodes.every(
+      (other) =>
+        state.declared[other] !== true ||
+        state.orphaned[other] === true ||
+        disjoint(state.files[other] ?? [], files),
+    ),
+
+  orphan: (state: AbstractSystemState, node: NodeId): boolean =>
+    state.declared[node] === true &&
+    state.orphaned[node] !== true &&
+    state.effect[node] === "idle" &&
+    state.merging[node] !== true,
+
+  amend: (config: SystemModelConfig, state: AbstractSystemState, node: NodeId, files: readonly string[]): boolean =>
+    state.declared[node] === true &&
+    state.orphaned[node] !== true &&
+    state.cmd[node] === "none" &&
+    state.effect[node] === "idle" &&
+    state.merging[node] !== true &&
+    state.integrated[node] !== true &&
+    files.every((file) => config.fileUniverse.includes(file)) &&
+    config.nodes.every(
+      (other) =>
+        other === node ||
+        state.declared[other] !== true ||
+        state.orphaned[other] === true ||
+        disjoint(state.files[other] ?? [], files),
+    ),
+
+  "mark-stale": (state: AbstractSystemState, node: NodeId): boolean =>
+    state.declared[node] === true &&
+    state.orphaned[node] !== true &&
+    state.cmd[node] === "none" &&
+    state.effect[node] === "idle" &&
+    state.merging[node] !== true &&
+    state.integrated[node] !== true &&
+    (state.status[node] === "completed" ||
+      state.status[node] === "blocked" ||
+      state.status[node] === "interrupted" ||
+      state.status[node] === "failed" ||
+      state.status[node] === "underspecified"),
+
+  reset: (state: AbstractSystemState, node: NodeId): boolean => state.status[node] === "stale",
+
+  park: (state: AbstractSystemState, node: NodeId): boolean =>
+    state.declared[node] === true && state.orphaned[node] !== true && state.status[node] === "pending",
+
+  unpark: (state: AbstractSystemState, node: NodeId): boolean => state.status[node] === "parked",
+
   dispatch: (config: SystemModelConfig, state: AbstractSystemState, node: NodeId): boolean =>
     state.declared[node] === true &&
+    state.orphaned[node] !== true &&
     state.status[node] === "pending" &&
     state.cmd[node] === "none" &&
     state.effect[node] === "idle" &&
@@ -310,6 +385,53 @@ export function referenceReduceSystemState(
         declared: set(state.declared, event.node, true),
         files: set(state.files, event.node, [...event.files]),
       };
+    case "adopt":
+      require(systemGuards.adopt(config, state, event.node, event.files), "adopt-not-enabled", event.node);
+      return {
+        ...state,
+        files: set(state.files, event.node, [...event.files]),
+        orphaned: set(state.orphaned, event.node, false),
+      };
+    case "orphan":
+      require(systemGuards.orphan(state, event.node), "orphan-not-enabled", event.node);
+      return {
+        ...state,
+        orphaned: set(state.orphaned, event.node, true),
+        files: set(state.files, event.node, []),
+      };
+    case "amend": {
+      require(systemGuards.amend(config, state, event.node, event.files), "amend-not-enabled", event.node);
+      const status = state.status[event.node]!;
+      return {
+        ...state,
+        files: set(state.files, event.node, [...event.files]),
+        status: set(state.status, event.node, status === "pending" || status === "parked" ? status : "stale"),
+      };
+    }
+    case "mark-stale":
+      require(systemGuards["mark-stale"](state, event.node), "mark-stale-not-enabled", event.node);
+      return { ...state, status: set(state.status, event.node, "stale") };
+    case "reset":
+      require(systemGuards.reset(state, event.node), "reset-not-enabled", event.node);
+      return {
+        ...state,
+        status: set(state.status, event.node, "pending"),
+        cmd: set(state.cmd, event.node, "none"),
+        effect: set(state.effect, event.node, "idle"),
+        effectFence: set(state.effectFence, event.node, 0),
+        completedGen: set(state.completedGen, event.node, 0),
+        gstate: set(state.gstate, event.node, "absent"),
+        committed: set(state.committed, event.node, false),
+        registered: set(state.registered, event.node, false),
+        merging: set(state.merging, event.node, false),
+        checked: set(state.checked, event.node, false),
+      };
+    case "park":
+      require(systemGuards.park(state, event.node), "park-not-enabled", event.node);
+      return { ...state, status: set(state.status, event.node, "parked") };
+    case "unpark":
+      require(systemGuards.unpark(state, event.node), "unpark-not-enabled", event.node);
+      return { ...state, status: set(state.status, event.node, "pending") };
     case "dispatch":
       require(systemGuards.dispatch(config, state, event.node), "dispatch-not-enabled", event.node);
       return {
@@ -466,6 +588,19 @@ export function enabledSystemEvents(
         if (systemGuards.declare(config, state, node, files)) events.push({ type: "declare", node, files });
       }
     }
+    if (state.declared[node] === true && state.orphaned[node] === true) {
+      for (const files of subsets(config.fileUniverse)) {
+        if (systemGuards.adopt(config, state, node, files)) events.push({ type: "adopt", node, files });
+      }
+    }
+    if (systemGuards.orphan(state, node)) events.push({ type: "orphan", node });
+    for (const files of subsets(config.fileUniverse)) {
+      if (systemGuards.amend(config, state, node, files)) events.push({ type: "amend", node, files });
+    }
+    if (systemGuards["mark-stale"](state, node)) events.push({ type: "mark-stale", node });
+    if (systemGuards.reset(state, node)) events.push({ type: "reset", node });
+    if (systemGuards.park(state, node)) events.push({ type: "park", node });
+    if (systemGuards.unpark(state, node)) events.push({ type: "unpark", node });
     if (systemGuards.dispatch(config, state, node)) events.push({ type: "dispatch", node });
     if (systemGuards["finish-worktree"](state, node)) events.push({ type: "finish-worktree", node });
     if (systemGuards.admit(state, node)) events.push({ type: "admit", node });
@@ -528,8 +663,8 @@ export function systemInvariantViolations(
     if (status === "completed" && state.checked[node] !== true) {
       push("CompletedFilesChecked", `${node} completed without a declared-file check`);
     }
-    if ((status === "blocked" || status === "underspecified") && (effect !== "idle" || cmd !== "none")) {
-      push("SuspendedImpliesIdle", `${node} suspended with active work`);
+    if ((status === "blocked" || status === "underspecified" || status === "parked" || status === "stale") && (effect !== "idle" || cmd !== "none")) {
+      push("SuspendedImpliesIdle", `${node} suspended/parked/stale with active work`);
     }
     if (fence > gen) push("FenceBound", `${node} fence ${fence} > gen ${gen}`);
 
@@ -578,10 +713,13 @@ export function systemInvariantViolations(
 
     // Induction strengthenings: true of every reachable state, needed to make
     // the safety invariant inductive for arbitrary node sets (see DagSystemProof).
-    if (state.declared[node] !== true && (state.files[node] ?? []).length > 0) {
-      push("UndeclaredFree", `${node} holds files while undeclared`);
+    if ((state.declared[node] !== true || state.orphaned[node] === true) && (state.files[node] ?? []).length > 0) {
+      push("UndeclaredFree", `${node} holds files while undeclared or orphaned`);
     }
-    if (status !== "pending" && !depsIntegrated(config, state, node)) {
+    if (state.orphaned[node] === true && state.declared[node] !== true) {
+      push("UndeclaredFree", `${node} is orphaned while undeclared`);
+    }
+    if (status !== "pending" && status !== "parked" && !depsIntegrated(config, state, node)) {
       push("DepsIntegratedBeyondPending", `${node} left pending before its dependencies were integrated`);
     }
     if (SUSPENDED_STATUSES.has(status) && phase !== "created") {

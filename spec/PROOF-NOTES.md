@@ -9,7 +9,7 @@ THEOREM Safety ==
   PROVE Spec => []Inv
 ```
 
-Status: **all 510 obligations proved** by tlapm 1.6.0-pre.
+Status: **all 664 obligations proved** by tlapm 1.6.0-pre.
 
 ## Toolchain
 
@@ -44,7 +44,7 @@ PATH="$HOME/.local/tlapm/bin:$PATH" \
 ## Proof structure
 
 1. `<1>1. Init => Inv` — one step per invariant component.
-2. `<1>2. Inv /\ [Next]_vars => Inv'` — one case per action (19 node actions,
+2. `<1>2. Inv /\ [Next]_vars => Inv'` — one case per action (26 node actions,
    `Crash`, `Reopen`, stutter), each split into one step per component, then a
    propositional `QED`.
 3. `<1>3. QED BY <1>1, <1>2, PTL DEF Spec`.
@@ -57,7 +57,7 @@ state, each now in `Inv` and mirrored in `src/formal/system-model.ts`:
 
 | Strengthening | Why induction needs it |
 |---|---|
-| `UndeclaredFree` | only a declared node may hold files, so `Declare` is disjoint from every node's files |
+| `UndeclaredFree` | an orphaned node is declared, and an undeclared or orphaned node holds no files; together with `Declare`'s `~declared[n]` guard this keeps a fresh declaration disjoint from every node's files |
 | `DepsIntegratedBeyondPending` | a suspended node resumed/steered/stopped back to `starting` must still satisfy the dependency coupling |
 | `SuspendedHasWorktree` | steering a suspended node back to `starting` must not lose its worktree |
 | `DispatchedDeclared` | a finished node entering the merge phase has a non-`absent` git state, so it must be declared |

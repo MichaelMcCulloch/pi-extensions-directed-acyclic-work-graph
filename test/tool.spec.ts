@@ -56,4 +56,44 @@ describe("dag tool", () => {
     expect(result.details.error).toBe("dag-unknown-node");
     expect(text(result)).toContain("refused");
   });
+
+  it("dry-runs a declaration and reports the diff without applying", async () => {
+    const store = new DagStore({ append() {} });
+    store.declare(modelDeclarations());
+    const revision = store.state.revision;
+    const result = await tool(store).execute!(
+      "c",
+      { action: "write", nodes: modelDeclarations() as never, dry_run: true },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(text(result)).toContain("dry-run");
+    expect(text(result)).toContain("unchanged n1, n2, n3");
+    expect(store.state.revision).toBe(revision);
+  });
+
+  it("reports the plan waves", async () => {
+    const store = new DagStore({ append() {} });
+    store.declare(modelDeclarations());
+    const result = await tool(store).execute!("c", { action: "plan" }, undefined, undefined, ctx);
+    expect(text(result)).toBe("plan: w1 n1 → w2 n2 → w3 n3");
+  });
+
+  it("blocks and unblocks a pending node", async () => {
+    const store = new DagStore({ append() {} });
+    store.declare(modelDeclarations());
+    const blocked = await tool(store).execute!(
+      "c",
+      { action: "block", node: "n3", reason: "external release" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(text(blocked)).toContain("external release");
+    expect(store.state.nodes["n3"]!.status).toBe("parked");
+    const unblocked = await tool(store).execute!("c", { action: "unblock", node: "n3" }, undefined, undefined, ctx);
+    expect(text(unblocked)).toContain("unparked");
+    expect(store.state.nodes["n3"]!.status).toBe("pending");
+  });
 });

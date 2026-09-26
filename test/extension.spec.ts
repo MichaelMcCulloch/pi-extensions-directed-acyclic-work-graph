@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import dagExtension, { DAG_STATE_ENTRY, latestSnapshot } from "../src/index.ts";
-import { applyDeclaration, initDagState } from "../src/engine/state.ts";
+import { DagStore } from "../src/extension/store.ts";
+import { initDagState } from "../src/engine/state.ts";
 import { modelDeclarations } from "./helpers.ts";
 
 function fakeCtx(branch: readonly unknown[]): ExtensionContext {
@@ -37,7 +38,9 @@ describe("extension wiring", () => {
 
   it("folds the newest persisted snapshot and ignores other entries", () => {
     const first = initDagState();
-    const second = applyDeclaration(initDagState(), modelDeclarations());
+    const store = new DagStore({ append() {} });
+    store.declare(modelDeclarations());
+    const second = store.state;
     const branch = [
       { type: "message", message: {} },
       { type: "custom", customType: "other", data: { nope: true } },

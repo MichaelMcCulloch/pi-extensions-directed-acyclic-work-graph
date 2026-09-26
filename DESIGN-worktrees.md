@@ -10,11 +10,11 @@ There is **one** TLA+ subject and **one** executable mirror:
 | Artifact | Role |
 |---|---|
 | `spec/DagSystem.tla` | the whole DAG tool as one product: scheduler + worktree/integration + declared file ownership, with the coupling invariants |
-| `spec/DagSystemProof.tla` | the TLAPS inductive proof: `Spec => []Inv` for **arbitrary** `Nodes`, `Edges`, `Files`, `MaxGen`, `MaxDropped` (510 obligations) |
+| `spec/DagSystemProof.tla` | the TLAPS inductive proof: `Spec => []Inv` for **arbitrary** `Nodes`, `Edges`, `Files`, `MaxGen`, `MaxDropped` (664 obligations) |
 | `src/formal/system-model.ts` | the executable mirror of that product |
 | `test/system-model.spec.ts` | exhaustive exploration + count cross-check: the mirror reaches exactly the TLC count |
 
-TLC verifies **3,946 distinct reachable states** on the fixture with safety and
+TLC verifies **12,495 distinct reachable states** on the fixture with safety and
 liveness. TLAPS then proves that the safety invariant is inductive, so `[]Inv`
 holds for **every** node set and dependency relation, not just the fixture. The
 invariants that only the product can state are the point:
@@ -62,8 +62,8 @@ of production behavior.
 
 | Piece | Where | State |
 |---|---|---|
-| The composed machine | `spec/DagSystem.tla` | TLC-verified on the fixture (3,946 states; scheduler + worktree + file ownership, coupling invariants) |
-| Safety for arbitrary N | `spec/DagSystemProof.tla` | TLAPS: `Init => Inv` and all 22 actions preserve all 10 components; `[]Inv` for every `Nodes`, `Edges`, `Files`, `MaxGen`, `MaxDropped` |
+| The composed machine | `spec/DagSystem.tla` | TLC-verified on the fixture (12,495 states; scheduler + worktree + file ownership + declaration membership, coupling invariants) |
+| Safety for arbitrary N | `spec/DagSystemProof.tla` | TLAPS: `Init => Inv` and all 29 actions preserve all 10 components; `[]Inv` for every `Nodes`, `Edges`, `Files`, `MaxGen`, `MaxDropped` |
 | Executable mirror + count cross-check | `src/formal/system-model.ts`, `test/system-model.spec.ts` | done; TS reaches TLC's exact count |
 | Production machine | `src/engine/state.ts`, `src/engine/reducer.ts`, `src/extension/store.ts` | one durable store whose reducer IS `referenceReduceSystemState` |
 | Git engine | `src/engine/git.ts` | done; probe, add, validate, ff-or-`--no-ff`, abort, resolve, remove, repair; tested against a real repo |

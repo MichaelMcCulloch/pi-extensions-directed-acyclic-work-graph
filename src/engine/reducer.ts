@@ -20,6 +20,14 @@ import type { DagNode, DagReceipt, DagState, NodeId } from "./state.ts";
 
 /** A command the dispatcher or the store can issue. */
 export type DagCommand =
+  | { readonly type: "declare"; readonly node: NodeId; readonly files: readonly string[] }
+  | { readonly type: "adopt"; readonly node: NodeId; readonly files: readonly string[] }
+  | { readonly type: "orphan"; readonly node: NodeId }
+  | { readonly type: "amend"; readonly node: NodeId; readonly files: readonly string[] }
+  | { readonly type: "mark-stale"; readonly node: NodeId }
+  | { readonly type: "reset"; readonly node: NodeId }
+  | { readonly type: "park"; readonly node: NodeId }
+  | { readonly type: "unpark"; readonly node: NodeId }
   | { readonly type: "dispatch"; readonly node: NodeId; readonly base: string; readonly worktree: string; readonly branch: string }
   | { readonly type: "finish-worktree"; readonly node: NodeId }
   | { readonly type: "admit"; readonly node: NodeId }
@@ -76,8 +84,9 @@ export function abstractSystemState(state: DagState): AbstractSystemState {
     return out;
   };
   return {
-    declared: pick(() => true),
+    declared: pick((id) => state.nodes[id]!.declared),
     files: pick((id) => [...state.nodes[id]!.files]),
+    orphaned: pick((id) => state.nodes[id]!.orphaned),
     status: pick((id) => state.nodes[id]!.status),
     gen: pick((id) => state.nodes[id]!.gen),
     cmd: pick((id) => state.nodes[id]!.cmd),
@@ -97,6 +106,22 @@ export function abstractSystemState(state: DagState): AbstractSystemState {
 /** Map a command to the abstract event it applies. */
 export function eventsForCommand(command: DagCommand): SystemEvent[] {
   switch (command.type) {
+    case "declare":
+      return [{ type: "declare", node: command.node, files: command.files }];
+    case "adopt":
+      return [{ type: "adopt", node: command.node, files: command.files }];
+    case "orphan":
+      return [{ type: "orphan", node: command.node }];
+    case "amend":
+      return [{ type: "amend", node: command.node, files: command.files }];
+    case "mark-stale":
+      return [{ type: "mark-stale", node: command.node }];
+    case "reset":
+      return [{ type: "reset", node: command.node }];
+    case "park":
+      return [{ type: "park", node: command.node }];
+    case "unpark":
+      return [{ type: "unpark", node: command.node }];
     case "dispatch":
       return [{ type: "dispatch", node: command.node }];
     case "finish-worktree":
@@ -154,6 +179,14 @@ export function effectsForCommand(command: DagCommand): DagEffect[] {
       return [{ kind: "cancel-node", node: command.node }];
     case "reconcile":
       return [{ kind: "reconcile-node", node: command.node }];
+    case "declare":
+    case "adopt":
+    case "orphan":
+    case "amend":
+    case "mark-stale":
+    case "reset":
+    case "park":
+    case "unpark":
     case "finish-worktree":
     case "admit":
     case "check-files":
@@ -181,6 +214,20 @@ export function isEnabled(state: DagState, event: SystemEvent): boolean {
   switch (event.type) {
     case "declare":
       return systemGuards.declare(config, abs, event.node, event.files);
+    case "adopt":
+      return systemGuards.adopt(config, abs, event.node, event.files);
+    case "orphan":
+      return systemGuards.orphan(abs, event.node);
+    case "amend":
+      return systemGuards.amend(config, abs, event.node, event.files);
+    case "mark-stale":
+      return systemGuards["mark-stale"](abs, event.node);
+    case "reset":
+      return systemGuards.reset(abs, event.node);
+    case "park":
+      return systemGuards.park(abs, event.node);
+    case "unpark":
+      return systemGuards.unpark(abs, event.node);
     case "dispatch":
       return systemGuards.dispatch(config, abs, event.node);
     case "finish-worktree":
@@ -233,6 +280,9 @@ export function applyEvent(state: DagState, event: SystemEvent): DagState {
     const nodeState = state.nodes[id]!;
     nodes[id] = {
       ...nodeState,
+      declared: after.declared[id] === true,
+      files: [...(after.files[id] ?? [])],
+      orphaned: after.orphaned[id] === true,
       status: after.status[id]!,
       gen: after.gen[id]!,
       cmd: after.cmd[id]!,
@@ -283,6 +333,26 @@ function withFacts(state: DagState, command: DagCommand): DagState {
   if (command.type === "commit-merge" || command.type === "resolve-conflict") {
     const node = state.nodes[command.node]!;
     return { ...state, nodes: { ...state.nodes, [command.node]: { ...node, mergeCommit: command.mergeCommit } } };
+  }
+  if (command.type === "reset") {
+    // The model returns the node to pending; the workspace facts are abandoned
+    // with the worktree so a later dispatch starts clean.
+    const node = state.nodes[command.node]!;
+    return {
+      ...state,
+      nodes: {
+        ...state.nodes,
+        [command.node]: {
+          ...node,
+          worktree: null,
+          branch: null,
+          base: null,
+          completedCommit: null,
+          mergeCommit: null,
+          staleReason: null,
+        },
+      },
+    };
   }
   return state;
 }

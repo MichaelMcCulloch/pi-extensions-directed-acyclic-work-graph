@@ -29,6 +29,8 @@ const STATUS_MARK: Readonly<Record<SystemStatus, string>> = {
   failed: "✗",
   interrupted: "⚠",
   underspecified: "?",
+  parked: "⏸",
+  stale: "↺",
 };
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;

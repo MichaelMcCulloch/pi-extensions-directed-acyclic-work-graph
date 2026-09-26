@@ -104,11 +104,34 @@ export class DagDispatcher {
    * Dispatch a batch of ready nodes. Spawns are concurrent; settlement is
    * serialized because every settlement may merge into the integration branch.
    * Overlapping runs are refused so settlements cannot interleave.
+   *
+   * With `follow`/`untilIdle`, the ready set is re-evaluated after each wave
+   * and dispatch continues until nothing is ready (parked nodes simply stop the
+   * wave; their dependents stay not-ready).
    */
-  public async run(nodes: readonly string[], generation: number): Promise<DispatchResult[]> {
+  public async run(
+    nodes: readonly string[],
+    generation: number,
+    options: { readonly follow?: boolean; readonly untilIdle?: boolean } = {},
+  ): Promise<DispatchResult[]> {
     if (this.#running) throw new Error("a dispatch is already running");
     this.#running = true;
     try {
+      const results: DispatchResult[] = [];
+      let batch = [...nodes];
+      do {
+        results.push(...(await this.#runBatch(batch, generation)));
+        if (options.follow !== true && options.untilIdle !== true) break;
+        batch = [...this.#store.board.ready];
+      } while (batch.length > 0);
+      return results;
+    } finally {
+      this.#running = false;
+    }
+  }
+
+  async #runBatch(nodes: readonly string[], generation: number): Promise<DispatchResult[]> {
+    {
       const probe = probeRepository(this.#repo);
       if (!probe.ok) throw new Error(`repository root not ready: ${probe.reasons.join(", ")}`);
       const base = revParse(this.#repo, "HEAD");
@@ -166,8 +189,6 @@ export class DagDispatcher {
         results.push(await this.#settle(node, outcome));
       }
       return results;
-    } finally {
-      this.#running = false;
     }
   }
 

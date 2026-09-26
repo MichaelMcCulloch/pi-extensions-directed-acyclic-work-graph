@@ -17,7 +17,8 @@
     "verify:traces": "node scripts/tla.mjs traces",
     "verify:formal": "node scripts/tla.mjs all",
     "verify": "pnpm run typecheck && pnpm run test && pnpm run verify:formal && pnpm run verify:proof",
-    "verify:proof": "node scripts/tlapm.mjs"
+    "verify:proof": "node scripts/tlapm.mjs",
+    "gen:proof": "node scripts/gen-proof.mjs spec/DagSystemProof.tla"
   },
   "keywords": [
     "pi",

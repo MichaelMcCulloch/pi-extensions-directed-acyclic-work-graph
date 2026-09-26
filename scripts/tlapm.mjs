@@ -59,6 +59,12 @@ function main() {
   const stdlib = findStdlib(tlapm);
   const args = [];
   if (stdlib) args.push("-I", stdlib);
+  // Bound backend concurrency: the default (one worker per core) can spawn a
+  // large number of Z3 processes on many-core hosts. Override with
+  // TLAPM_THREADS, or pass extra flags in TLAPM_ARGS.
+  args.push("--threads", process.env.TLAPM_THREADS ?? "4");
+  const extra = (process.env.TLAPM_ARGS ?? "").split(/\s+/).filter((value) => value.length > 0);
+  args.push(...extra);
   args.push(PROOF);
 
   process.stdout.write(`\n$ (cd spec && ${tlapm} ${args.join(" ")})\n`);
